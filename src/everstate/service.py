@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from .git_observer import snapshot_event
-from .models import ProjectState
+from .models import Event, ProjectState
 from .storage import LocalStore
 
 
@@ -26,14 +26,17 @@ class EverstateService:
         self._materialize_git_state(project_id, event.payload)
         return project_id
 
-    def refresh_project(self, root: Path) -> ProjectState:
+    def _ensure_project(self, root: Path) -> tuple[Path, str]:
         root = root.resolve()
         project = self.store.get_project_by_root(root)
         if project is None:
             self.init_project(root)
             project = self.store.get_project_by_root(root)
             assert project is not None
-        project_id = project["id"]
+        return root, project["id"]
+
+    def refresh_project(self, root: Path) -> ProjectState:
+        root, project_id = self._ensure_project(root)
         event = snapshot_event(project_id, root)
         existing_events = self.store.list_events(project_id, limit=1)
         if not existing_events or existing_events[0]["content_hash"] != event.content_hash:
@@ -64,6 +67,91 @@ class EverstateService:
         self.store.save_state(state)
         return state
 
+    def _record_state_event(self, root: Path, event_type: str, payload: dict) -> ProjectState:
+        root, project_id = self._ensure_project(root)
+        current = self.refresh_project(root)
+        event = Event(
+            project_id=project_id,
+            event_type=event_type,
+            source_type="explicit_user_input",
+            source_locator=str(root),
+            actor="user",
+            payload=payload,
+        )
+        self.store.append_event(event)
+
+        objective = current.objective
+        current_task = current.current_task
+        constraints = list(current.active_constraints)
+        decisions = list(current.decisions)
+        failures = list(current.failed_attempts)
+        blockers = list(current.blockers)
+        next_action = current.next_action
+
+        value = str(payload.get("value", "")).strip()
+        if event_type == "objective_set":
+            objective = value
+        elif event_type == "task_set":
+            current_task = value
+        elif event_type == "decision_added" and value and value not in decisions:
+            decisions.append(value)
+        elif event_type == "constraint_added" and value and value not in constraints:
+            constraints.append(value)
+        elif event_type == "failure_added" and value and value not in failures:
+            failures.append(value)
+        elif event_type == "blocker_added" and value and value not in blockers:
+            blockers.append(value)
+        elif event_type == "next_action_set":
+            next_action = value
+        else:
+            if event_type not in {
+                "objective_set",
+                "task_set",
+                "decision_added",
+                "constraint_added",
+                "failure_added",
+                "blocker_added",
+                "next_action_set",
+            }:
+                raise ValueError(f"Unsupported state event: {event_type}")
+
+        state = ProjectState(
+            project_id=project_id,
+            version=current.version + 1,
+            objective=objective,
+            current_task=current_task,
+            active_constraints=constraints,
+            decisions=decisions,
+            failed_attempts=failures,
+            blockers=blockers,
+            modified_files=list(current.modified_files),
+            next_action=next_action,
+            unresolved_conflicts=list(current.unresolved_conflicts),
+        )
+        self.store.save_state(state)
+        return state
+
+    def set_objective(self, root: Path, value: str) -> ProjectState:
+        return self._record_state_event(root, "objective_set", {"value": value})
+
+    def set_task(self, root: Path, value: str) -> ProjectState:
+        return self._record_state_event(root, "task_set", {"value": value})
+
+    def add_decision(self, root: Path, value: str) -> ProjectState:
+        return self._record_state_event(root, "decision_added", {"value": value})
+
+    def add_constraint(self, root: Path, value: str) -> ProjectState:
+        return self._record_state_event(root, "constraint_added", {"value": value})
+
+    def add_failure(self, root: Path, value: str) -> ProjectState:
+        return self._record_state_event(root, "failure_added", {"value": value})
+
+    def add_blocker(self, root: Path, value: str) -> ProjectState:
+        return self._record_state_event(root, "blocker_added", {"value": value})
+
+    def set_next_action(self, root: Path, value: str) -> ProjectState:
+        return self._record_state_event(root, "next_action_set", {"value": value})
+
     def status(self, root: Path) -> ProjectState:
         return self.refresh_project(root)
 
@@ -91,8 +179,10 @@ class EverstateService:
         else:
             lines.append("- Working tree clean")
 
+        self._append_section(lines, "Active decisions:", state.decisions, "None captured yet")
         self._append_section(lines, "Active constraints:", state.active_constraints, "None captured yet")
         self._append_section(lines, "Known failed attempts:", state.failed_attempts, "None captured yet")
         self._append_section(lines, "Blockers:", state.blockers, "None captured yet")
+        self._append_section(lines, "Unresolved conflicts:", state.unresolved_conflicts, "None detected")
         lines.extend(["", f"Next action: {state.next_action or 'Not yet established'}"])
         return "\n".join(lines)
