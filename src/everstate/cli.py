@@ -70,9 +70,14 @@ def status(
 @app.command("providers")
 def providers_command(
     json_output: bool = typer.Option(False, "--json", help="Print provider readiness as JSON."),
+    active: bool = typer.Option(
+        False,
+        "--active",
+        help="Run opt-in provider health requests. These may consume a small amount of provider usage.",
+    ),
 ) -> None:
     """Discover continuity targets and show their current readiness."""
-    results = probe_all_providers()
+    results = probe_all_providers(active=active)
     if json_output:
         typer.echo(
             json.dumps(
@@ -84,6 +89,8 @@ def providers_command(
                         "ready": result.ready,
                         "detail": result.detail,
                         "executable": result.executable,
+                        "checked_at": result.checked_at.isoformat(),
+                        "active_check": result.active_check,
                         "capability": {
                             "coding_agent": result.capability.coding_agent,
                             "repository_access": result.capability.repository_access,
@@ -107,7 +114,10 @@ def providers_command(
         style = "green" if result.ready else "yellow"
         table.add_row(result.name, f"[{style}]{result.state.value}[/{style}]", result.detail)
     console.print(table)
-    console.print("[dim]Executable discovery is implemented first. Auth/quota/network probes arrive in M2.5B.[/dim]")
+    if active:
+        console.print("[dim]Active health checks were requested. They use fixed health prompts and send no project state or source.[/dim]")
+    else:
+        console.print("[dim]Passive mode checks installation and local auth state. Use --active to test provider network/quota health.[/dim]")
 
 
 @app.command("set-objective")
