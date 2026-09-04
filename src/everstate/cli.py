@@ -22,6 +22,10 @@ def _service() -> EverstateService:
     return EverstateService(LocalStore(_db_path()))
 
 
+def _print_version(state_version: int) -> None:
+    console.print(f"[green]Everstate state updated to v{state_version}[/green]")
+
+
 @app.command()
 def init(path: Path = typer.Argument(Path.cwd(), exists=True, file_okay=False)) -> None:
     """Register a Git project locally and capture its first state snapshot."""
@@ -49,12 +53,76 @@ def status(
     console.print(f"Project: {path.resolve()}")
     console.print(f"Objective: {state.objective or '[dim]not established[/dim]'}")
     console.print(f"Current task: {state.current_task or '[dim]not established[/dim]'}")
+    console.print(f"Next action: {state.next_action or '[dim]not established[/dim]'}")
     console.print("Modified files:")
     if state.modified_files:
         for file in state.modified_files:
             console.print(f"  • {file}")
     else:
         console.print("  • [dim]working tree clean[/dim]")
+
+
+@app.command("set-objective")
+def set_objective(
+    value: str = typer.Argument(..., help="The project's current objective."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Record the current project objective as explicit user state."""
+    _print_version(_service().set_objective(path, value).version)
+
+
+@app.command("set-task")
+def set_task(
+    value: str = typer.Argument(..., help="The task currently being worked on."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Record the current task."""
+    _print_version(_service().set_task(path, value).version)
+
+
+@app.command()
+def decide(
+    value: str = typer.Argument(..., help="An active project decision."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Record an explicit active decision."""
+    _print_version(_service().add_decision(path, value).version)
+
+
+@app.command()
+def constraint(
+    value: str = typer.Argument(..., help="An active constraint the next AI must preserve."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Record an active project constraint."""
+    _print_version(_service().add_constraint(path, value).version)
+
+
+@app.command()
+def fail(
+    value: str = typer.Argument(..., help="A failed approach and, ideally, why it failed."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Record a failed attempt so future agents do not repeat it blindly."""
+    _print_version(_service().add_failure(path, value).version)
+
+
+@app.command()
+def block(
+    value: str = typer.Argument(..., help="A blocker preventing progress."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Record a current blocker."""
+    _print_version(_service().add_blocker(path, value).version)
+
+
+@app.command("next")
+def set_next(
+    value: str = typer.Argument(..., help="The next expected action."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Record the next expected action for continuation."""
+    _print_version(_service().set_next_action(path, value).version)
 
 
 @app.command()
