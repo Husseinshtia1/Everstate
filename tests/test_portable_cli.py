@@ -66,6 +66,7 @@ def test_copy_command_exports_when_clipboard_is_unavailable(monkeypatch, tmp_pat
     result = runner.invoke(app, ["copy", "--path", str(tmp_path)])
 
     assert result.exit_code == 0
-    assert "portable files were exported instead" in result.stdout
+    assert "No supported clipboard utility was detected" in result.stdout
+    assert "portable files were exported" in result.stdout
     assert (tmp_path / ".everstate" / "exports" / "everstate-state-v7.md").exists()
     assert (tmp_path / ".everstate" / "exports" / "everstate-state-v7.json").exists()
