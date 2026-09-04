@@ -25,9 +25,21 @@ The first product wedge is local continuity between coding agents such as Claude
 - No raw source-code upload is required for local mode
 - No account is required for the community/local runtime
 
+## Quick start on Ubuntu
+
+```bash
+git clone https://github.com/Husseinshtia1/Everstate.git
+cd Everstate
+bash scripts/bootstrap_ubuntu.sh
+source .venv/bin/activate
+everstate --help
+```
+
+For the first controlled Claude/other-agent -> Everstate -> Codex acceptance run, follow `docs/UBUNTU_FIRST_RUN.md`.
+
 ## Current local prototype
 
-The development branch currently supports a local SQLite-backed state model and a CLI for capturing the minimum continuity state needed before provider adapters are introduced.
+Everstate currently supports local SQLite-backed project state, Git observation, explicit structured state capture, provider-neutral continuation packets, Claude Code/Codex launch adapters, and a deterministic continuity acceptance harness.
 
 ```bash
 everstate init .
@@ -41,6 +53,7 @@ everstate next "Run the failing callback test in isolation"
 everstate status
 everstate resume
 everstate packet
+everstate switch codex --dry-run
 ```
 
 `everstate resume` is human-facing. `everstate packet` emits a version-pinned AI-to-AI continuation contract containing current objective/task, decisions, constraints, failed attempts, blockers, modified files, unresolved conflicts, and the next expected action.
@@ -49,13 +62,13 @@ everstate packet
 
 - **M0 — Truth Before Memory:** local project model, Git observation, immutable events, evidence-backed claims, versioned state.
 - **M1 — Resume:** structured objective/task/decision/constraint/failure/blocker state, human Resume, and canonical Continuation Packet.
-- **M2 — Cross-agent continuity:** hand off work between Claude Code and Codex.
+- **M2 — Cross-agent continuity:** provider adapters plus deterministic acceptance harness for mid-task handoff.
 - **M3 — Correct Context:** compile the minimum verified context required for the next task.
 - **M4 — Learn From Failure:** preserve failed attempts and warn before unnecessary repetition.
 
 ## Status
 
-Very early development. M0 CI is green and M1 is under active implementation on the first pull request. Everstate remains local-first with no server or account dependency in this phase.
+Very early development. M0 and M1 are merged to `main`; the first M2 deterministic continuity harness is also merged. The next validation step is a real Ubuntu handoff run against native Codex. Everstate remains local-first with no server or account dependency in this phase.
 
 ## Licensing direction
 
