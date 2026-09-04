@@ -10,9 +10,16 @@ from rich.table import Table
 
 from .acceptance import ContinuityScenario, evaluate_scenario, seed_scenario
 from .handoff import launch_handoff, prepare_handoff
-from .provider_readiness import probe_all_providers
+from .provider_readiness import ProviderState, probe_all_providers, probe_executable_provider
 from .providers import get_provider
 from .routing import RoutingMode, rank_providers
+from .routing_attempts import (
+    RoutingAttempt,
+    append_routing_attempt,
+    classify_launch_outcome,
+    next_eligible_after_failure,
+    now_iso,
+)
 from .service import EverstateService
 from .storage import LocalStore
 
@@ -52,6 +59,35 @@ def _print_ranked_targets(ranked) -> None:
             recommendation,
         )
     console.print(table)
+
+
+def _audit_attempt(
+    *,
+    path: Path,
+    packet,
+    selected,
+    mode: RoutingMode,
+    selected_by: str,
+    result: str,
+    failure_class: ProviderState | None,
+    returncode: int | None,
+    started_at: str,
+) -> Path:
+    attempt = RoutingAttempt(
+        project_id=packet.project_id,
+        state_version=packet.state_version,
+        target_key=selected.probe.key,
+        target_name=selected.probe.name,
+        routing_mode=mode.value,
+        routing_score=selected.routing.score,
+        selected_by=selected_by,
+        result=result,
+        failure_class=failure_class.value if failure_class is not None else None,
+        returncode=returncode,
+        started_at=started_at,
+        finished_at=now_iso(),
+    )
+    return append_routing_attempt(path, attempt)
 
 
 @app.command()
@@ -154,7 +190,7 @@ def continue_work(
         help="Actively test provider network/quota health before ranking; may consume small provider usage.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show routing decision without launching a provider."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Launch the recommended target without confirmation."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Launch the first selected target without confirmation."),
 ) -> None:
     """Find the safest available way to continue the current project."""
     probes = probe_all_providers(active=active_health)
@@ -162,6 +198,7 @@ def continue_work(
     _print_ranked_targets(ranked)
 
     selected = None
+    selected_by = "explicit" if target is not None else "recommended"
     if target is not None:
         selected = next((item for item in ranked if item.probe.key == target), None)
         if selected is None:
@@ -202,14 +239,103 @@ def continue_work(
         console.print("Continuation cancelled; project state remains unchanged.")
         return
 
-    provider = get_provider(selected.probe.key)
-    packet = _service().continuation_packet(path)
-    try:
-        result = launch_handoff(path, packet, provider)
-    except FileNotFoundError as exc:
-        raise typer.BadParameter(str(exc), param_hint="--target") from exc
-    console.print(f"Handoff: {result.path}")
-    console.print(f"{provider.name} exited with code {result.returncode}")
+    service = _service()
+    packet = service.continuation_packet(path)
+    failed_keys: set[str] = set()
+
+    while selected is not None and not selected.probe.capability.manual:
+        provider = get_provider(selected.probe.key)
+        started_at = now_iso()
+        try:
+            result = launch_handoff(path, packet, provider)
+            returncode = result.returncode
+            handoff_path = result.path
+        except FileNotFoundError:
+            returncode = None
+            handoff_path = None
+            failure_class = ProviderState.NOT_INSTALLED
+            _audit_attempt(
+                path=path,
+                packet=packet,
+                selected=selected,
+                mode=mode,
+                selected_by=selected_by,
+                result="FAILED",
+                failure_class=failure_class,
+                returncode=returncode,
+                started_at=started_at,
+            )
+        else:
+            if returncode == 0:
+                history_path = _audit_attempt(
+                    path=path,
+                    packet=packet,
+                    selected=selected,
+                    mode=mode,
+                    selected_by=selected_by,
+                    result="EXITED_ZERO",
+                    failure_class=None,
+                    returncode=returncode,
+                    started_at=started_at,
+                )
+                console.print(f"Handoff: {handoff_path}")
+                console.print(f"{provider.name} exited with code 0")
+                console.print("[dim]Exit code 0 means the provider session exited cleanly; Everstate does not claim the project task is complete.[/dim]")
+                console.print(f"[dim]Routing audit: {history_path}[/dim]")
+                return
+
+            post_probe = probe_executable_provider(selected.probe.key, provider, active=False)
+            failure_class = classify_launch_outcome(returncode, post_probe)
+            _audit_attempt(
+                path=path,
+                packet=packet,
+                selected=selected,
+                mode=mode,
+                selected_by=selected_by,
+                result="FAILED",
+                failure_class=failure_class,
+                returncode=returncode,
+                started_at=started_at,
+            )
+
+        failed_keys.add(selected.probe.key)
+        failure_text = failure_class.value if failure_class is not None else "UNKNOWN_FAILURE"
+        console.print(f"[yellow]{selected.probe.name} could not continue: {failure_text}.[/yellow]")
+        console.print("[dim]Project state remains safe; this provider is excluded from the current fallback chain.[/dim]")
+
+        refreshed_packet = service.continuation_packet(path)
+        if refreshed_packet.state_version != packet.state_version:
+            console.print(
+                f"[cyan]Repository evidence changed during the failed attempt; continuation state refreshed "
+                f"from v{packet.state_version} to v{refreshed_packet.state_version}.[/cyan]"
+            )
+        packet = refreshed_packet
+
+        next_target = next_eligible_after_failure(ranked, failed_keys)
+        if next_target is None:
+            console.print("[yellow]No additional continuation target is currently eligible.[/yellow]")
+            console.print(f"Manual packet remains available: everstate packet {path.resolve()}")
+            return
+
+        if next_target.probe.capability.manual:
+            console.print("[yellow]Integrated AI targets are exhausted. Manual continuation remains available.[/yellow]")
+            console.print(f"Run: everstate packet {path.resolve()}")
+            return
+
+        console.print(
+            Panel.fit(
+                f"[bold]{next_target.probe.name}[/bold]\n"
+                f"State: {next_target.probe.state.value}\n"
+                f"Routing score: {next_target.routing.score:.1f}/100",
+                title="Next available fallback",
+            )
+        )
+        if not typer.confirm(f"Try fallback {next_target.probe.name}?", default=True):
+            console.print("Fallback cancelled; project state remains unchanged.")
+            return
+
+        selected = next_target
+        selected_by = "fallback-confirmed"
 
 
 @app.command("set-objective")

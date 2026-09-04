@@ -6,6 +6,8 @@ from typer.testing import CliRunner
 
 import everstate.cli as cli_module
 from everstate.cli import app
+from everstate.continuity import ContinuationPacket
+from everstate.handoff import HandoffResult
 from everstate.provider_readiness import ProviderCapability, ProviderProbeResult, ProviderState
 
 
@@ -35,6 +37,22 @@ def probe(
             cloud=cloud,
             manual=manual,
         ),
+    )
+
+
+def packet(version: int = 12) -> ContinuationPacket:
+    return ContinuationPacket(
+        project_id="proj_test",
+        state_version=version,
+        objective="Continue safely",
+        current_task="Fix the current bug",
+        decisions=[],
+        constraints=["Preserve security"],
+        failed_attempts=[],
+        blockers=[],
+        modified_files=[],
+        unresolved_conflicts=[],
+        next_action="Continue",
     )
 
 
@@ -121,3 +139,52 @@ def test_continue_active_health_is_opt_in(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert seen["active"] is True
+
+
+def test_continue_audits_failed_provider_and_offers_next_target(monkeypatch, tmp_path: Path) -> None:
+    class FakeService:
+        def continuation_packet(self, path: Path) -> ContinuationPacket:
+            return packet()
+
+    monkeypatch.setattr(cli_module, "_service", lambda: FakeService())
+    monkeypatch.setattr(
+        cli_module,
+        "probe_all_providers",
+        lambda active=False: [
+            probe("codex"),
+            probe("claude"),
+            probe("manual", state=ProviderState.ALWAYS_READY, coding=False, repo=False, cloud=False, manual=True),
+        ],
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "launch_handoff",
+        lambda root, packet, provider: HandoffResult(
+            path=root / ".everstate" / "handoffs" / "test.md",
+            command=[provider.executable, "prompt"],
+            launched=True,
+            returncode=1,
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "probe_executable_provider",
+        lambda key, provider, active=False: probe(key, state=ProviderState.AUTH_EXPIRED),
+    )
+
+    result = runner.invoke(
+        app,
+        ["continue", "--path", str(tmp_path), "--target", "codex", "--yes"],
+        input="n\n",
+    )
+
+    assert result.exit_code == 0
+    assert "codex could not continue: AUTH_EXPIRED" in result.stdout
+    assert "Next available fallback" in result.stdout
+    assert "claude" in result.stdout
+    assert "Fallback cancelled" in result.stdout
+    history = tmp_path / ".everstate" / "routing-history.jsonl"
+    assert history.exists()
+    text = history.read_text(encoding="utf-8")
+    assert '"target_key": "codex"' in text
+    assert '"failure_class": "AUTH_EXPIRED"' in text
