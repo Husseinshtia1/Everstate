@@ -68,6 +68,17 @@ def test_passive_claude_probe_verifies_local_auth_without_spending_quota(monkeyp
     assert "quota/network were not actively tested" in result.detail
 
 
+def test_passive_gemini_probe_is_truthful_about_unverified_auth(monkeypatch) -> None:
+    provider = ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",))
+    monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/tmp/gemini")
+
+    result = probe_executable_provider("gemini", provider)
+
+    assert result.state is ProviderState.READY
+    assert result.ready is True
+    assert "authentication/quota/network were not actively verified" in result.detail
+
+
 def test_active_probe_classifies_real_refresh_token_failure(monkeypatch) -> None:
     provider = ProviderAdapter(name="Codex", executable="codex")
     monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/tmp/codex")
@@ -93,9 +104,36 @@ def test_active_probe_classifies_real_refresh_token_failure(monkeypatch) -> None
     assert result.active_check is True
 
 
+def test_active_gemini_probe_uses_headless_prompt_and_classifies_missing_auth(monkeypatch) -> None:
+    provider = ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",))
+    monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/tmp/gemini")
+    seen: dict[str, list[str]] = {}
+
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="Please set an Auth method before running Gemini CLI",
+        )
+
+    monkeypatch.setattr(readiness.subprocess, "run", fake_run)
+    result = probe_executable_provider("gemini", provider, active=True)
+
+    assert result.state is ProviderState.NEEDS_LOGIN
+    assert result.ready is False
+    assert result.active_check is True
+    assert seen["command"][:2] == ["/tmp/gemini", "-p"]
+    assert "--output-format" in seen["command"]
+    assert "json" in seen["command"]
+
+
 def test_failure_classifier_distinguishes_limits_rate_and_network() -> None:
     assert classify_provider_failure("Usage limit reached", 1) is ProviderState.LIMIT_REACHED
+    assert classify_provider_failure("QUOTA_EXHAUSTED", 1) is ProviderState.LIMIT_REACHED
     assert classify_provider_failure("HTTP 429 Too Many Requests", 1) is ProviderState.RATE_LIMITED
+    assert classify_provider_failure("RESOURCE_EXHAUSTED", 1) is ProviderState.RATE_LIMITED
     assert classify_provider_failure("connection refused", 1) is ProviderState.NETWORK_UNAVAILABLE
     assert classify_provider_failure("HTTP 503 Service Unavailable", 1) is ProviderState.PROVIDER_OUTAGE
 
