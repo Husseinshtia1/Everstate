@@ -58,7 +58,7 @@ def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
 def classify_provider_failure(output: str, returncode: int) -> ProviderState:
     text = output.lower()
 
-    if "refresh token was already used" in text or "token expired" in text or "token_revoked" in text:
+    if "refresh token was already used" in text or "refresh_token_reused" in text or "token expired" in text or "token_revoked" in text:
         return ProviderState.AUTH_EXPIRED
     if "please log out and sign in again" in text or "authentication token" in text and "unauthorized" in text:
         return ProviderState.AUTH_EXPIRED
@@ -112,7 +112,15 @@ def _active_health_command(key: str, executable: str) -> list[str] | None:
     if key == "claude":
         return [executable, "-p", prompt]
     if key == "codex":
-        return [executable, "exec", prompt]
+        return [
+            executable,
+            "exec",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            prompt,
+        ]
     return None
 
 
@@ -142,8 +150,8 @@ def probe_executable_provider(
             return ProviderProbeResult(
                 key=key,
                 name=provider.name,
-                state=ProviderState.NETWORK_UNAVAILABLE,
-                detail="Authentication status probe could not complete.",
+                state=ProviderState.UNKNOWN_FAILURE,
+                detail="Local authentication status probe could not complete.",
                 executable=executable,
                 capability=capability,
                 active_check=active,
