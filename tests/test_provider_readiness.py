@@ -7,7 +7,7 @@ from everstate.providers import ProviderAdapter
 def test_probe_marks_missing_provider_not_installed(monkeypatch) -> None:
     provider = ProviderAdapter(name="Missing", executable="definitely-missing-everstate-binary")
 
-    monkeypatch.setattr(provider, "resolve_executable", lambda: None)
+    monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: None)
     result = probe_executable_provider("missing", provider)
 
     assert result.state is ProviderState.NOT_INSTALLED
@@ -18,7 +18,7 @@ def test_probe_marks_missing_provider_not_installed(monkeypatch) -> None:
 def test_probe_marks_discovered_provider_ready(monkeypatch) -> None:
     provider = ProviderAdapter(name="Example", executable="example")
 
-    monkeypatch.setattr(provider, "resolve_executable", lambda: "/tmp/example")
+    monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/tmp/example")
     result = probe_executable_provider("example", provider)
 
     assert result.state is ProviderState.READY
