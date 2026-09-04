@@ -67,6 +67,14 @@ class EverstateService:
     def status(self, root: Path) -> ProjectState:
         return self.refresh_project(root)
 
+    @staticmethod
+    def _append_section(lines: list[str], title: str, items: list[str], empty: str) -> None:
+        lines.extend(["", title])
+        if items:
+            lines.extend(f"- {item}" for item in items)
+        else:
+            lines.append(f"- {empty}")
+
     def resume_text(self, root: Path) -> str:
         state = self.refresh_project(root)
         lines = [
@@ -83,14 +91,8 @@ class EverstateService:
         else:
             lines.append("- Working tree clean")
 
-        lines.extend(["", "Active constraints:"])
-        lines.extend(f"- {item}" for item in state.active_constraints) or lines.append("- None captured yet")
-
-        lines.extend(["", "Known failed attempts:"])
-        lines.extend(f"- {item}" for item in state.failed_attempts) or lines.append("- None captured yet")
-
-        lines.extend(["", "Blockers:"])
-        lines.extend(f"- {item}" for item in state.blockers) or lines.append("- None captured yet")
-
+        self._append_section(lines, "Active constraints:", state.active_constraints, "None captured yet")
+        self._append_section(lines, "Known failed attempts:", state.failed_attempts, "None captured yet")
+        self._append_section(lines, "Blockers:", state.blockers, "None captured yet")
         lines.extend(["", f"Next action: {state.next_action or 'Not yet established'}"])
         return "\n".join(lines)
