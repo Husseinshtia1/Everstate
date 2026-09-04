@@ -10,6 +10,7 @@ from rich.table import Table
 
 from .acceptance import ContinuityScenario, evaluate_scenario, seed_scenario
 from .handoff import launch_handoff, prepare_handoff
+from .portable import copy_packet, export_packet
 from .provider_readiness import ProviderState, probe_all_providers, probe_executable_provider
 from .providers import get_provider
 from .routing import RoutingMode, rank_providers
@@ -179,6 +180,37 @@ def providers_command(
         console.print("[dim]Passive mode checks installation and local auth state. Use --active to test provider network/quota health.[/dim]")
 
 
+@app.command("export")
+def export_continuation(
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+    output_dir: Path | None = typer.Option(None, "--output-dir", file_okay=False),
+) -> None:
+    """Export the canonical continuation state as portable Markdown and JSON."""
+    packet = _service().continuation_packet(path)
+    result = export_packet(path, packet, output_dir)
+    console.print(f"[green]Portable continuation exported for state v{packet.state_version}.[/green]")
+    console.print(f"Markdown: {result.markdown_path}")
+    console.print(f"JSON: {result.json_path}")
+
+
+@app.command("copy")
+def copy_continuation(
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Copy the canonical continuation packet to the system clipboard when supported."""
+    packet = _service().continuation_packet(path)
+    executable = copy_packet(packet)
+    if executable is not None:
+        console.print(f"[green]Continuation state v{packet.state_version} copied to clipboard.[/green]")
+        console.print(f"[dim]Clipboard tool: {executable}[/dim]")
+        return
+
+    result = export_packet(path, packet)
+    console.print("[yellow]No supported clipboard utility was detected; portable files were exported instead.[/yellow]")
+    console.print(f"Markdown: {result.markdown_path}")
+    console.print(f"JSON: {result.json_path}")
+
+
 @app.command("continue")
 def continue_work(
     path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
@@ -228,7 +260,7 @@ def continue_work(
 
     if selected.probe.capability.manual:
         console.print("[yellow]No integrated AI target is ready. Manual continuation is still available.[/yellow]")
-        console.print(f"Run: everstate packet {path.resolve()}")
+        console.print(f"Run: everstate export --path {path.resolve()}")
         return
 
     if dry_run:
@@ -314,12 +346,12 @@ def continue_work(
         next_target = next_eligible_after_failure(ranked, failed_keys)
         if next_target is None:
             console.print("[yellow]No additional continuation target is currently eligible.[/yellow]")
-            console.print(f"Manual packet remains available: everstate packet {path.resolve()}")
+            console.print(f"Portable continuation remains available: everstate export --path {path.resolve()}")
             return
 
         if next_target.probe.capability.manual:
-            console.print("[yellow]Integrated AI targets are exhausted. Manual continuation remains available.[/yellow]")
-            console.print(f"Run: everstate packet {path.resolve()}")
+            console.print("[yellow]Integrated AI targets are exhausted. Portable continuation remains available.[/yellow]")
+            console.print(f"Run: everstate export --path {path.resolve()}")
             return
 
         console.print(
