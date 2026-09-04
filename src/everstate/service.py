@@ -39,8 +39,12 @@ class EverstateService:
     def refresh_project(self, root: Path) -> ProjectState:
         root, project_id = self._ensure_project(root)
         event = snapshot_event(project_id, root)
-        existing_events = self.store.list_events(project_id, limit=1)
-        if not existing_events or existing_events[0]["content_hash"] != event.content_hash:
+        recent_events = self.store.list_events(project_id, limit=200)
+        latest_git_event = next(
+            (row for row in recent_events if row["event_type"] == "git_snapshot"),
+            None,
+        )
+        if latest_git_event is None or latest_git_event["content_hash"] != event.content_hash:
             self.store.append_event(event)
             return self._materialize_git_state(project_id, event.payload)
         latest = self.store.latest_state(project_id)
