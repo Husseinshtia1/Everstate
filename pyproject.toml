@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "everstate"
+version = "0.1.0.dev0"
+description = "Local-first AI work continuity and project-state runtime"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "AGPL-3.0-or-later OR Commercial" }
+authors = [
+  { name = "Everstate contributors" }
+]
+dependencies = [
+  "typer>=0.12,<1",
+  "pydantic>=2.8,<3",
+  "rich>=13.7,<14"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9",
+  "pytest-cov>=5,<6"
+]
+
+[project.scripts]
+everstate = "everstate.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/everstate"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"

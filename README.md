@@ -25,17 +25,37 @@ The first product wedge is local continuity between coding agents such as Claude
 - No raw source-code upload is required for local mode
 - No account is required for the community/local runtime
 
+## Current local prototype
+
+The development branch currently supports a local SQLite-backed state model and a CLI for capturing the minimum continuity state needed before provider adapters are introduced.
+
+```bash
+everstate init .
+everstate set-objective "Prove cross-AI continuity"
+everstate set-task "Fix OAuth callback regression"
+everstate decide "Provider B remains active"
+everstate constraint "Do not modify database schema"
+everstate fail "Provider A fallback duplicated callback handling"
+everstate block "Redirect URI test is failing"
+everstate next "Run the failing callback test in isolation"
+everstate status
+everstate resume
+everstate packet
+```
+
+`everstate resume` is human-facing. `everstate packet` emits a version-pinned AI-to-AI continuation contract containing current objective/task, decisions, constraints, failed attempts, blockers, modified files, unresolved conflicts, and the next expected action.
+
 ## Initial milestones
 
 - **M0 — Truth Before Memory:** local project model, Git observation, immutable events, evidence-backed claims, versioned state.
-- **M1 — Resume:** reconstruct where a project currently stands and what changed.
+- **M1 — Resume:** structured objective/task/decision/constraint/failure/blocker state, human Resume, and canonical Continuation Packet.
 - **M2 — Cross-agent continuity:** hand off work between Claude Code and Codex.
 - **M3 — Correct Context:** compile the minimum verified context required for the next task.
 - **M4 — Learn From Failure:** preserve failed attempts and warn before unnecessary repetition.
 
 ## Status
 
-Very early development. The repository is being built as a local-first open-source project before any optional hosted services are introduced.
+Very early development. M0 CI is green and M1 is under active implementation on the first pull request. Everstate remains local-first with no server or account dependency in this phase.
 
 ## Licensing direction
 
