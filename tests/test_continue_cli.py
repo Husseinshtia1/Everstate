@@ -121,7 +121,7 @@ def test_continue_falls_back_to_manual_when_all_ai_targets_unavailable(monkeypat
 
     assert result.exit_code == 0
     assert "Manual continuation is still available" in result.stdout
-    assert "everstate packet" in result.stdout
+    assert "everstate export" in result.stdout
 
 
 def test_continue_active_health_is_opt_in(monkeypatch, tmp_path: Path) -> None:
