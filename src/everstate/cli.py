@@ -127,8 +127,22 @@ def set_next(
 
 @app.command()
 def resume(path: Path = typer.Argument(Path.cwd(), exists=True, file_okay=False)) -> None:
-    """Generate a compact continuation brief from the current local state."""
+    """Generate a compact human-facing continuation brief."""
     typer.echo(_service().resume_text(path))
+
+
+@app.command()
+def packet(
+    path: Path = typer.Argument(Path.cwd(), exists=True, file_okay=False),
+    json_output: bool = typer.Option(False, "--json", help="Print the canonical continuation packet as JSON."),
+) -> None:
+    """Generate the canonical AI-to-AI continuation packet."""
+    service = _service()
+    continuation = service.continuation_packet(path)
+    if json_output:
+        typer.echo(json.dumps(continuation.model_dump(mode="json"), indent=2))
+        return
+    typer.echo(continuation.to_prompt())
 
 
 @app.command()
