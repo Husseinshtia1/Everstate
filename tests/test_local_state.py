@@ -135,3 +135,29 @@ def test_resume_reports_structured_continuity_state(tmp_path: Path) -> None:
     assert "No provider adapter yet" in brief
     assert "Implement continuation packet" in brief
     assert "feature.py" in brief
+
+
+def test_continuation_packet_is_ai_ready_and_version_pinned(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    service = EverstateService(LocalStore(tmp_path / "state.db"))
+    service.init_project(root)
+    service.set_objective(root, "Complete authentication migration")
+    service.set_task(root, "Fix OAuth callback regression")
+    service.add_decision(root, "Provider B remains active")
+    service.add_constraint(root, "Do not modify database schema")
+    service.add_failure(root, "Provider A fallback duplicated callback handling")
+    service.add_blocker(root, "Redirect URI test is failing")
+    service.set_next_action(root, "Run the failing callback test in isolation")
+    (root / "auth.py").write_text("provider = 'B'\n", encoding="utf-8")
+
+    packet = service.continuation_packet(root)
+    prompt = packet.to_prompt()
+
+    assert packet.state_version == service.status(root).version
+    assert "auth.py" in packet.modified_files
+    assert "EVERSTATE CONTINUATION PACKET" in prompt
+    assert "Do not repeat FAILED ATTEMPTS" in prompt
+    assert "Provider B remains active" in prompt
+    assert "Do not modify database schema" in prompt
+    assert "Provider A fallback duplicated callback handling" in prompt
+    assert "Run the failing callback test in isolation" in prompt
