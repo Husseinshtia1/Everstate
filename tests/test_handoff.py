@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from everstate.continuity import ContinuationPacket
@@ -14,9 +13,11 @@ def test_supported_provider_commands_are_interactive(monkeypatch) -> None:
 
     claude = get_provider("claude")
     codex = get_provider("codex")
+    gemini = get_provider("gemini")
 
     assert claude.interactive_command("continue") == ["claude", "continue"]
     assert codex.interactive_command("continue") == ["codex", "continue"]
+    assert gemini.interactive_command("continue") == ["gemini", "-i", "continue"]
 
 
 def test_codex_is_discovered_from_user_npm_prefix_when_not_on_path(tmp_path: Path, monkeypatch) -> None:
@@ -34,6 +35,23 @@ def test_codex_is_discovered_from_user_npm_prefix_when_not_on_path(tmp_path: Pat
     assert codex.available() is True
     assert codex.resolve_executable() == str(binary)
     assert codex.interactive_command("continue") == [str(binary), "continue"]
+
+
+def test_gemini_is_discovered_from_user_npm_prefix_when_not_on_path(tmp_path: Path, monkeypatch) -> None:
+    fake_home = tmp_path / "home"
+    binary = fake_home / ".npm-global" / "bin" / "gemini"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    binary.chmod(0o755)
+
+    monkeypatch.setattr("everstate.providers.shutil.which", lambda _: None)
+    monkeypatch.setattr("everstate.providers.Path.home", lambda: fake_home)
+
+    gemini = get_provider("gemini")
+
+    assert gemini.available() is True
+    assert gemini.resolve_executable() == str(binary)
+    assert gemini.interactive_command("continue") == [str(binary), "-i", "continue"]
 
 
 def test_provider_binary_can_be_overridden(tmp_path: Path, monkeypatch) -> None:
@@ -57,9 +75,8 @@ def test_unknown_provider_is_rejected() -> None:
         raise AssertionError("Unknown provider should be rejected")
 
 
-def test_prepare_handoff_writes_local_version_pinned_packet(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("everstate.providers.ProviderAdapter.resolve_executable", lambda self: self.executable)
-    packet = ContinuationPacket(
+def _packet() -> ContinuationPacket:
+    return ContinuationPacket(
         project_id="proj_test",
         state_version=12,
         objective="Complete OAuth migration",
@@ -72,7 +89,10 @@ def test_prepare_handoff_writes_local_version_pinned_packet(tmp_path: Path, monk
         next_action="Run callback test in isolation",
     )
 
-    result = prepare_handoff(tmp_path, packet, get_provider("codex"))
+
+def test_prepare_handoff_writes_local_version_pinned_packet(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("everstate.providers.ProviderAdapter.resolve_executable", lambda self: self.executable)
+    result = prepare_handoff(tmp_path, _packet(), get_provider("codex"))
 
     assert result.launched is False
     assert result.path == tmp_path / ".everstate" / "handoffs" / "state-v12-codex.md"
@@ -82,4 +102,15 @@ def test_prepare_handoff_writes_local_version_pinned_packet(tmp_path: Path, monk
     assert "Provider B remains active" in text
     assert "Do not change database schema" in text
     assert result.command[0] == "codex"
-    assert "Inspect the current working tree" in result.command[1]
+    assert "Inspect the current working tree" in result.command[-1]
+
+
+def test_prepare_gemini_handoff_preserves_prompt_after_interactive_flag(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("everstate.providers.ProviderAdapter.resolve_executable", lambda self: self.executable)
+
+    result = prepare_handoff(tmp_path, _packet(), get_provider("gemini"))
+
+    assert result.path == tmp_path / ".everstate" / "handoffs" / "state-v12-gemini.md"
+    assert result.command[:2] == ["gemini", "-i"]
+    assert "EVERSTATE CONTINUATION PACKET" in result.command[-1]
+    assert "Inspect the current working tree" in result.command[-1]
