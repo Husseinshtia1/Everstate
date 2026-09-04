@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from .acceptance import ContinuityScenario, evaluate_scenario, seed_scenario
 from .handoff import launch_handoff, prepare_handoff
 from .providers import get_provider
 from .service import EverstateService
@@ -168,6 +169,39 @@ def switch_provider(
         raise typer.BadParameter(str(exc), param_hint="target") from exc
     console.print(f"Handoff: {result.path}")
     console.print(f"{provider.name} exited with code {result.returncode}")
+
+
+@app.command("acceptance-seed")
+def acceptance_seed(
+    scenario_file: Path = typer.Argument(..., exists=True, dir_okay=False),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+) -> None:
+    """Seed a benchmark project with an interrupted-task Everstate state."""
+    scenario = ContinuityScenario.load(scenario_file)
+    prompt = seed_scenario(_service(), path, scenario)
+    console.print(f"[green]Seeded acceptance scenario[/green]: {scenario.name}")
+    typer.echo(prompt)
+
+
+@app.command("acceptance-evaluate")
+def acceptance_evaluate(
+    scenario_file: Path = typer.Argument(..., exists=True, dir_okay=False),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+    json_output: bool = typer.Option(False, "--json", help="Print the full acceptance report as JSON."),
+) -> None:
+    """Evaluate observable project outcomes after a continuity handoff."""
+    scenario = ContinuityScenario.load(scenario_file)
+    report = evaluate_scenario(path, scenario)
+    if json_output:
+        typer.echo(json.dumps(report.model_dump(mode="json"), indent=2))
+    else:
+        status_text = "PASS" if report.passed else "FAIL"
+        console.print(f"[bold]{status_text}[/bold] {report.scenario} — score {report.score:.0%}")
+        for check in report.checks:
+            marker = "✓" if check.passed else "✗"
+            console.print(f" {marker} {check.name}: {check.details}")
+    if not report.passed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
