@@ -6,9 +6,11 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 
 from .acceptance import ContinuityScenario, evaluate_scenario, seed_scenario
 from .handoff import launch_handoff, prepare_handoff
+from .provider_readiness import probe_all_providers
 from .providers import get_provider
 from .service import EverstateService
 from .storage import LocalStore
@@ -63,6 +65,49 @@ def status(
             console.print(f"  • {file}")
     else:
         console.print("  • [dim]working tree clean[/dim]")
+
+
+@app.command("providers")
+def providers_command(
+    json_output: bool = typer.Option(False, "--json", help="Print provider readiness as JSON."),
+) -> None:
+    """Discover continuity targets and show their current readiness."""
+    results = probe_all_providers()
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "key": result.key,
+                        "name": result.name,
+                        "state": result.state.value,
+                        "ready": result.ready,
+                        "detail": result.detail,
+                        "executable": result.executable,
+                        "capability": {
+                            "coding_agent": result.capability.coding_agent,
+                            "repository_access": result.capability.repository_access,
+                            "local": result.capability.local,
+                            "cloud": result.capability.cloud,
+                            "manual": result.capability.manual,
+                        },
+                    }
+                    for result in results
+                ],
+                indent=2,
+            )
+        )
+        return
+
+    table = Table(title="Everstate continuity targets")
+    table.add_column("Target")
+    table.add_column("State")
+    table.add_column("Details")
+    for result in results:
+        style = "green" if result.ready else "yellow"
+        table.add_row(result.name, f"[{style}]{result.state.value}[/{style}]", result.detail)
+    console.print(table)
+    console.print("[dim]Executable discovery is implemented first. Auth/quota/network probes arrive in M2.5B.[/dim]")
 
 
 @app.command("set-objective")
