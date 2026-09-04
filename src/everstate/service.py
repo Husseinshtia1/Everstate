@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from .continuity import ContinuationPacket
 from .git_observer import snapshot_event
 from .models import Event, ProjectState
 from .storage import LocalStore
@@ -154,6 +155,12 @@ class EverstateService:
 
     def status(self, root: Path) -> ProjectState:
         return self.refresh_project(root)
+
+    def continuation_packet(self, root: Path) -> ContinuationPacket:
+        return ContinuationPacket.from_state(self.refresh_project(root))
+
+    def continuation_text(self, root: Path) -> str:
+        return self.continuation_packet(root).to_prompt()
 
     @staticmethod
     def _append_section(lines: list[str], title: str, items: list[str], empty: str) -> None:
