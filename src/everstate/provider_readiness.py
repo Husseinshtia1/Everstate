@@ -62,11 +62,26 @@ def classify_provider_failure(output: str, returncode: int) -> ProviderState:
         return ProviderState.AUTH_EXPIRED
     if "please log out and sign in again" in text or "authentication token" in text and "unauthorized" in text:
         return ProviderState.AUTH_EXPIRED
-    if "not logged in" in text or "not signed in" in text or "please log in" in text or "please sign in" in text:
+    if (
+        "not logged in" in text
+        or "not signed in" in text
+        or "please log in" in text
+        or "please sign in" in text
+        or "please set an auth method" in text
+        or "manual authorization is required" in text
+        or "must specify the gemini_api_key" in text
+        or "no authentication is configured" in text
+    ):
         return ProviderState.NEEDS_LOGIN
-    if "usage limit" in text or "limit reached" in text or "quota exhausted" in text or "quota exceeded" in text:
+    if (
+        "usage limit" in text
+        or "limit reached" in text
+        or "quota exhausted" in text
+        or "quota_exhausted" in text
+        or "quota exceeded" in text
+    ):
         return ProviderState.LIMIT_REACHED
-    if "rate limit" in text or "too many requests" in text or "http 429" in text or "status 429" in text:
+    if "rate limit" in text or "too many requests" in text or "http 429" in text or "status 429" in text or "resource_exhausted" in text:
         return ProviderState.RATE_LIMITED
     if (
         "network is unreachable" in text
@@ -121,6 +136,8 @@ def _active_health_command(key: str, executable: str) -> list[str] | None:
             "read-only",
             prompt,
         ]
+    if key == "gemini":
+        return [executable, "-p", prompt, "--output-format", "json"]
     return None
 
 
@@ -172,11 +189,16 @@ def probe_executable_provider(
             )
 
     if not active:
+        passive_detail = (
+            "Executable and local authentication status are ready; quota/network were not actively tested."
+            if auth_command is not None
+            else "Executable found; authentication/quota/network were not actively verified for this provider."
+        )
         return ProviderProbeResult(
             key=key,
             name=provider.name,
             state=ProviderState.READY,
-            detail="Executable and local authentication status are ready; quota/network were not actively tested.",
+            detail=passive_detail,
             executable=executable,
             capability=capability,
             active_check=False,
