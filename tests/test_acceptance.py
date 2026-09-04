@@ -71,6 +71,20 @@ def test_acceptance_fails_before_target_agent_changes_project(tmp_path: Path) ->
     assert any(check.name == "validation-command:1" and not check.passed for check in report.checks)
 
 
+def test_acceptance_ignores_everstate_and_python_cache_noise(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    (root / ".everstate" / "handoffs").mkdir(parents=True)
+    (root / ".everstate" / "handoffs" / "packet.md").write_text("internal\n", encoding="utf-8")
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "auth.cpython-312.pyc").write_bytes(b"cache")
+
+    report = evaluate_scenario(root, scenario())
+    required = next(check for check in report.checks if check.name == "required-change:auth.py")
+
+    assert required.passed is False
+    assert required.details == "changed=[]"
+
+
 def test_acceptance_passes_after_correct_continuation(tmp_path: Path) -> None:
     root = make_project(tmp_path)
     service = EverstateService(LocalStore(tmp_path / "state.db"))
