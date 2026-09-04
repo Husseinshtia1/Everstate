@@ -15,7 +15,7 @@
   "blockers": [
     "The current normalize_redirect implementation drops the query string"
   ],
-  "next_action": "Fix normalize_redirect in auth.py, then run the test suite.",
+  "next_action": "Fix normalize_redirect in auth.py, then run verify.py.",
   "required_changed_files": [
     "auth.py"
   ],
@@ -30,7 +30,7 @@
   },
   "validation_commands": [
     {
-      "command": ["python", "-m", "pytest", "-q"],
+      "command": ["python", "verify.py"],
       "expected_exit": 0
     }
   ]
