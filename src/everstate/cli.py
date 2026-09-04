@@ -12,6 +12,7 @@ from .acceptance import ContinuityScenario, evaluate_scenario, seed_scenario
 from .handoff import launch_handoff, prepare_handoff
 from .provider_readiness import probe_all_providers
 from .providers import get_provider
+from .routing import RoutingMode, rank_providers
 from .service import EverstateService
 from .storage import LocalStore
 
@@ -29,6 +30,28 @@ def _service() -> EverstateService:
 
 def _print_version(state_version: int) -> None:
     console.print(f"[green]Everstate state updated to v{state_version}[/green]")
+
+
+def _print_ranked_targets(ranked) -> None:
+    table = Table(title="Everstate continuation options")
+    table.add_column("Rank")
+    table.add_column("Target")
+    table.add_column("State")
+    table.add_column("Score")
+    table.add_column("Recommendation")
+    for item in ranked:
+        rank = str(item.rank) if item.rank is not None else "—"
+        score = f"{item.routing.score:.1f}" if item.routing.eligible else "—"
+        recommendation = "Recommended" if item.recommended else ""
+        style = "green" if item.probe.ready else "yellow"
+        table.add_row(
+            rank,
+            item.probe.name,
+            f"[{style}]{item.probe.state.value}[/{style}]",
+            score,
+            recommendation,
+        )
+    console.print(table)
 
 
 @app.command()
@@ -118,6 +141,75 @@ def providers_command(
         console.print("[dim]Active health checks were requested. They use fixed health prompts and send no project state or source.[/dim]")
     else:
         console.print("[dim]Passive mode checks installation and local auth state. Use --active to test provider network/quota health.[/dim]")
+
+
+@app.command("continue")
+def continue_work(
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+    mode: RoutingMode = typer.Option(RoutingMode.AUTO, "--mode", case_sensitive=False),
+    target: str | None = typer.Option(None, "--target", help="Explicit ready target key, such as codex or claude."),
+    active_health: bool = typer.Option(
+        False,
+        "--active-health",
+        help="Actively test provider network/quota health before ranking; may consume small provider usage.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show routing decision without launching a provider."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Launch the recommended target without confirmation."),
+) -> None:
+    """Find the safest available way to continue the current project."""
+    probes = probe_all_providers(active=active_health)
+    ranked = rank_providers(probes, mode)
+    _print_ranked_targets(ranked)
+
+    selected = None
+    if target is not None:
+        selected = next((item for item in ranked if item.probe.key == target), None)
+        if selected is None:
+            raise typer.BadParameter(f"Unknown continuation target {target!r}.", param_hint="--target")
+        if not selected.routing.eligible:
+            raise typer.BadParameter(
+                f"Target {target!r} is not ready: {selected.probe.state.value}.",
+                param_hint="--target",
+            )
+    elif mode is not RoutingMode.ASK_ME:
+        selected = next((item for item in ranked if item.recommended), None)
+
+    if selected is None:
+        console.print("[yellow]No target was selected automatically.[/yellow]")
+        console.print("Use --target <key> after reviewing the ranked options.")
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold]{selected.probe.name}[/bold]\n"
+            f"State: {selected.probe.state.value}\n"
+            f"Routing score: {selected.routing.score:.1f}/100\n"
+            f"Mode: {mode.value}",
+            title="Recommended continuation",
+        )
+    )
+
+    if selected.probe.capability.manual:
+        console.print("[yellow]No integrated AI target is ready. Manual continuation is still available.[/yellow]")
+        console.print(f"Run: everstate packet {path.resolve()}")
+        return
+
+    if dry_run:
+        console.print("[dim]Dry run only; no provider was launched.[/dim]")
+        return
+
+    if not yes and not typer.confirm(f"Continue with {selected.probe.name}?", default=True):
+        console.print("Continuation cancelled; project state remains unchanged.")
+        return
+
+    provider = get_provider(selected.probe.key)
+    packet = _service().continuation_packet(path)
+    try:
+        result = launch_handoff(path, packet, provider)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--target") from exc
+    console.print(f"Handoff: {result.path}")
+    console.print(f"{provider.name} exited with code {result.returncode}")
 
 
 @app.command("set-objective")
