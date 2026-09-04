@@ -59,14 +59,79 @@ def test_unchanged_repo_does_not_create_extra_version(tmp_path: Path) -> None:
     assert first.version == second.version == 1
 
 
-def test_resume_reports_working_tree_change(tmp_path: Path) -> None:
+def test_explicit_state_capture_is_versioned_and_persistent(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    store = LocalStore(tmp_path / "state.db")
+    service = EverstateService(store)
+    service.init_project(root)
+
+    service.set_objective(root, "Ship the continuity prototype")
+    service.set_task(root, "Implement structured state capture")
+    service.add_decision(root, "Local-first is the default")
+    service.add_constraint(root, "Do not require a cloud account")
+    service.add_failure(root, "Transcript-only handoff loses current-state semantics")
+    service.add_blocker(root, "Claude/Codex adapters are not implemented yet")
+    state = service.set_next_action(root, "Build the first continuation packet")
+
+    assert state.objective == "Ship the continuity prototype"
+    assert state.current_task == "Implement structured state capture"
+    assert state.decisions == ["Local-first is the default"]
+    assert state.active_constraints == ["Do not require a cloud account"]
+    assert state.failed_attempts == ["Transcript-only handoff loses current-state semantics"]
+    assert state.blockers == ["Claude/Codex adapters are not implemented yet"]
+    assert state.next_action == "Build the first continuation packet"
+    assert state.version == 8
+
+    latest = store.latest_state(state.project_id)
+    assert latest is not None
+    assert latest.model_dump() == state.model_dump()
+
+
+def test_duplicate_list_state_is_not_duplicated(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
     service = EverstateService(LocalStore(tmp_path / "state.db"))
     service.init_project(root)
+
+    service.add_constraint(root, "No cloud dependency")
+    state = service.add_constraint(root, "No cloud dependency")
+
+    assert state.active_constraints == ["No cloud dependency"]
+
+
+def test_explicit_state_capture_is_stored_as_events(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    store = LocalStore(tmp_path / "state.db")
+    service = EverstateService(store)
+    project_id = service.init_project(root)
+
+    service.add_decision(root, "Use SQLite for the local prototype")
+
+    events = store.list_events(project_id)
+    assert any(row["event_type"] == "decision_added" for row in events)
+    assert any(row["source_type"] == "explicit_user_input" for row in events)
+
+
+def test_resume_reports_structured_continuity_state(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    service = EverstateService(LocalStore(tmp_path / "state.db"))
+    service.init_project(root)
+    service.set_objective(root, "Prove cross-AI continuity")
+    service.set_task(root, "Build M1")
+    service.add_decision(root, "Use local-first state")
+    service.add_constraint(root, "Do not upload raw source code")
+    service.add_failure(root, "Raw transcript dumping produced noisy context")
+    service.add_blocker(root, "No provider adapter yet")
+    service.set_next_action(root, "Implement continuation packet")
     (root / "feature.py").write_text("x = 1\n", encoding="utf-8")
 
     brief = service.resume_text(root)
 
     assert "EVERSTATE PROJECT RESUME" in brief
+    assert "Prove cross-AI continuity" in brief
+    assert "Build M1" in brief
+    assert "Use local-first state" in brief
+    assert "Do not upload raw source code" in brief
+    assert "Raw transcript dumping produced noisy context" in brief
+    assert "No provider adapter yet" in brief
+    assert "Implement continuation packet" in brief
     assert "feature.py" in brief
-    assert "None captured yet" in brief
