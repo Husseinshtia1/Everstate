@@ -46,6 +46,17 @@ class AcceptanceReport(BaseModel):
     checks: list[AcceptanceCheck]
 
 
+def _is_internal_or_generated(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    parts = normalized.split("/")
+    return (
+        normalized == ".everstate"
+        or normalized.startswith(".everstate/")
+        or "__pycache__" in parts
+        or normalized.endswith(".pyc")
+    )
+
+
 def _git_changed_files(root: Path) -> set[str]:
     result = subprocess.run(
         ["git", "status", "--porcelain"],
@@ -61,6 +72,8 @@ def _git_changed_files(root: Path) -> set[str]:
         path = line[3:].strip()
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
+        if _is_internal_or_generated(path):
+            continue
         changed.add(path)
     return changed
 
