@@ -7,6 +7,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from .handoff import launch_handoff, prepare_handoff
+from .providers import get_provider
 from .service import EverstateService
 from .storage import LocalStore
 
@@ -143,6 +145,29 @@ def packet(
         typer.echo(json.dumps(continuation.model_dump(mode="json"), indent=2))
         return
     typer.echo(continuation.to_prompt())
+
+
+@app.command("switch")
+def switch_provider(
+    target: str = typer.Argument(..., help="Target AI provider: claude or codex."),
+    path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Prepare the handoff without launching the target AI."),
+) -> None:
+    """Prepare a crash-safe local handoff and optionally launch another AI tool."""
+    provider = get_provider(target)
+    packet = _service().continuation_packet(path)
+    if dry_run:
+        result = prepare_handoff(path, packet, provider)
+        console.print(f"[green]Handoff prepared[/green]: {result.path}")
+        console.print(f"Target: {provider.name}")
+        return
+
+    try:
+        result = launch_handoff(path, packet, provider)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc), param_hint="target") from exc
+    console.print(f"Handoff: {result.path}")
+    console.print(f"{provider.name} exited with code {result.returncode}")
 
 
 @app.command()
