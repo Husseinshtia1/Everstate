@@ -32,6 +32,7 @@ def _candidate_executables(executable: str) -> list[Path]:
 class ProviderAdapter:
     name: str
     executable: str
+    prompt_args: tuple[str, ...] = ()
 
     def resolve_executable(self) -> str | None:
         on_path = shutil.which(self.executable)
@@ -47,7 +48,7 @@ class ProviderAdapter:
         return self.resolve_executable() is not None
 
     def interactive_command(self, prompt: str) -> list[str]:
-        return [self.resolve_executable() or self.executable, prompt]
+        return [self.resolve_executable() or self.executable, *self.prompt_args, prompt]
 
     def launch(self, root: Path, prompt: str) -> int:
         executable = self.resolve_executable()
@@ -56,13 +57,18 @@ class ProviderAdapter:
                 f"{self.executable!r} is not available. Everstate checked PATH and common user install locations. "
                 f"Install or configure {self.name}, or set EVERSTATE_{self.executable.upper()}_BIN."
             )
-        completed = subprocess.run([executable, prompt], cwd=root.resolve(), check=False)
+        completed = subprocess.run(
+            [executable, *self.prompt_args, prompt],
+            cwd=root.resolve(),
+            check=False,
+        )
         return completed.returncode
 
 
 PROVIDERS: dict[str, ProviderAdapter] = {
     "claude": ProviderAdapter(name="Claude Code", executable="claude"),
     "codex": ProviderAdapter(name="Codex", executable="codex"),
+    "gemini": ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",)),
 }
 
 
