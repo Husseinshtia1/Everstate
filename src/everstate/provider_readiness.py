@@ -212,6 +212,11 @@ def probe_executable_provider(
     *,
     active: bool = False,
 ) -> ProviderProbeResult:
+    # Keep the legacy/public probe entry point safe for failure-aware routing:
+    # provider variants with local runtime requirements must never fall back to a generic executable-only READY.
+    if key == "codex-ollama":
+        return probe_codex_ollama(provider, active=active)
+
     executable = provider.resolve_executable()
     capability = ProviderCapability(coding_agent=True, repository_access=True)
     if executable is None:
@@ -370,8 +375,6 @@ def probe_provider(
     *,
     active: bool = False,
 ) -> ProviderProbeResult:
-    if key == "codex-ollama":
-        return probe_codex_ollama(provider, active=active)
     return probe_executable_provider(key, provider, active=active)
 
 
