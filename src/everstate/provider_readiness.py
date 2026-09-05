@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 
+from .local_ollama import model_is_installed, probe_ollama_runtime
 from .providers import PROVIDERS, ProviderAdapter
 
 
@@ -20,6 +21,7 @@ class ProviderState(StrEnum):
     NETWORK_UNAVAILABLE = "NETWORK_UNAVAILABLE"
     PROVIDER_OUTAGE = "PROVIDER_OUTAGE"
     MODEL_UNAVAILABLE = "MODEL_UNAVAILABLE"
+    LOCAL_RUNTIME_UNAVAILABLE = "LOCAL_RUNTIME_UNAVAILABLE"
     LOCAL_MODEL_MISSING = "LOCAL_MODEL_MISSING"
     LOCAL_RESOURCE_INSUFFICIENT = "LOCAL_RESOURCE_INSUFFICIENT"
     UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
@@ -58,6 +60,14 @@ def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
 def classify_provider_failure(output: str, returncode: int) -> ProviderState:
     text = output.lower()
 
+    if (
+        "out of memory" in text
+        or "not enough memory" in text
+        or "insufficient memory" in text
+        or "requires more system memory" in text
+        or "failed to allocate memory" in text
+    ):
+        return ProviderState.LOCAL_RESOURCE_INSUFFICIENT
     if "refresh token was already used" in text or "refresh_token_reused" in text or "token expired" in text or "token_revoked" in text:
         return ProviderState.AUTH_EXPIRED
     if "please log out and sign in again" in text or "authentication token" in text and "unauthorized" in text:
@@ -141,6 +151,61 @@ def _active_health_command(key: str, executable: str) -> list[str] | None:
     return None
 
 
+def _run_active_command(
+    key: str,
+    name: str,
+    executable: str,
+    capability: ProviderCapability,
+    health_command: list[str],
+) -> ProviderProbeResult:
+    with tempfile.TemporaryDirectory(prefix="everstate-provider-probe-") as temporary_directory:
+        try:
+            result = subprocess.run(
+                health_command,
+                cwd=Path(temporary_directory),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=25.0,
+            )
+        except subprocess.TimeoutExpired:
+            state = ProviderState.LOCAL_RUNTIME_UNAVAILABLE if capability.local else ProviderState.NETWORK_UNAVAILABLE
+            return ProviderProbeResult(
+                key=key,
+                name=name,
+                state=state,
+                detail="Active provider health check timed out.",
+                executable=executable,
+                capability=capability,
+                active_check=True,
+            )
+        except OSError as exc:
+            return ProviderProbeResult(
+                key=key,
+                name=name,
+                state=ProviderState.UNKNOWN_FAILURE,
+                detail=f"Active provider health check could not start: {exc}",
+                executable=executable,
+                capability=capability,
+                active_check=True,
+            )
+
+    output = _combined_output(result)
+    state = classify_provider_failure(output, result.returncode)
+    detail = "Active provider health check succeeded." if state is ProviderState.READY else (
+        output[-500:] or f"Provider health command exited with code {result.returncode}."
+    )
+    return ProviderProbeResult(
+        key=key,
+        name=name,
+        state=state,
+        detail=detail,
+        executable=executable,
+        capability=capability,
+        active_check=True,
+    )
+
+
 def probe_executable_provider(
     key: str,
     provider: ProviderAdapter,
@@ -215,53 +280,99 @@ def probe_executable_provider(
             capability=capability,
             active_check=True,
         )
+    return _run_active_command(key, provider.name, executable, capability, health_command)
 
-    with tempfile.TemporaryDirectory(prefix="everstate-provider-probe-") as temporary_directory:
-        try:
-            result = subprocess.run(
-                health_command,
-                cwd=Path(temporary_directory),
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=25.0,
-            )
-        except subprocess.TimeoutExpired:
-            return ProviderProbeResult(
-                key=key,
-                name=provider.name,
-                state=ProviderState.NETWORK_UNAVAILABLE,
-                detail="Active provider health check timed out.",
-                executable=executable,
-                capability=capability,
-                active_check=True,
-            )
-        except OSError as exc:
-            return ProviderProbeResult(
-                key=key,
-                name=provider.name,
-                state=ProviderState.UNKNOWN_FAILURE,
-                detail=f"Active provider health check could not start: {exc}",
-                executable=executable,
-                capability=capability,
-                active_check=True,
-            )
 
-    output = _combined_output(result)
-    state = classify_provider_failure(output, result.returncode)
-    if state is ProviderState.READY:
-        detail = "Active provider health check succeeded."
-    else:
-        detail = output[-500:] or f"Provider health command exited with code {result.returncode}."
-    return ProviderProbeResult(
-        key=key,
-        name=provider.name,
-        state=state,
-        detail=detail,
-        executable=executable,
-        capability=capability,
-        active_check=True,
+def probe_codex_ollama(
+    provider: ProviderAdapter,
+    *,
+    active: bool = False,
+) -> ProviderProbeResult:
+    capability = ProviderCapability(
+        coding_agent=True,
+        repository_access=True,
+        local=True,
+        cloud=False,
     )
+    executable = provider.resolve_executable()
+    if executable is None:
+        return ProviderProbeResult(
+            key="codex-ollama",
+            name=provider.name,
+            state=ProviderState.NOT_INSTALLED,
+            detail="Codex CLI is required for the local coding-agent frontend but was not found.",
+            executable=None,
+            capability=capability,
+            active_check=active,
+        )
+
+    runtime = probe_ollama_runtime()
+    if not runtime.reachable:
+        return ProviderProbeResult(
+            key="codex-ollama",
+            name=provider.name,
+            state=ProviderState.LOCAL_RUNTIME_UNAVAILABLE,
+            detail=runtime.detail,
+            executable=executable,
+            capability=capability,
+            active_check=active,
+        )
+
+    model = provider.selected_model()
+    if model is None or not model_is_installed(model, runtime.models):
+        available = ", ".join(runtime.models[:6]) if runtime.models else "none"
+        return ProviderProbeResult(
+            key="codex-ollama",
+            name=provider.name,
+            state=ProviderState.LOCAL_MODEL_MISSING,
+            detail=(
+                f"Required local model {model or 'not configured'} is not installed. "
+                f"Installed models: {available}. Set EVERSTATE_OLLAMA_MODEL to an already-installed model. "
+                "Everstate will not pull a model automatically."
+            ),
+            executable=executable,
+            capability=capability,
+            active_check=active,
+        )
+
+    if not active:
+        return ProviderProbeResult(
+            key="codex-ollama",
+            name=provider.name,
+            state=ProviderState.READY,
+            detail=f"Ollama is local and reachable; model {model} is installed. No model request was sent.",
+            executable=executable,
+            capability=capability,
+            active_check=False,
+        )
+
+    prompt = "Reply only EVERSTATE_READY. This is a local provider health check; do not inspect files or tools."
+    health_command = [
+        executable,
+        "exec",
+        "--oss",
+        "--local-provider",
+        "ollama",
+        "-m",
+        model,
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        prompt,
+    ]
+    return _run_active_command("codex-ollama", provider.name, executable, capability, health_command)
+
+
+def probe_provider(
+    key: str,
+    provider: ProviderAdapter,
+    *,
+    active: bool = False,
+) -> ProviderProbeResult:
+    if key == "codex-ollama":
+        return probe_codex_ollama(provider, active=active)
+    return probe_executable_provider(key, provider, active=active)
 
 
 def probe_manual_export() -> ProviderProbeResult:
@@ -277,7 +388,7 @@ def probe_manual_export() -> ProviderProbeResult:
 
 def probe_all_providers(*, active: bool = False) -> list[ProviderProbeResult]:
     results = [
-        probe_executable_provider(key, provider, active=active)
+        probe_provider(key, provider, active=active)
         for key, provider in PROVIDERS.items()
     ]
     results.append(probe_manual_export())
