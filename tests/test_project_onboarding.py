@@ -8,7 +8,9 @@ import everstate.project_onboarding as onboarding
 from everstate.project_onboarding import (
     ProjectCandidateKind,
     discover_project_candidates,
+    discover_workspace_families,
     register_project_candidate,
+    register_workspace_family,
 )
 from everstate.service import EverstateService
 from everstate.source_discovery import DiscoveredSession
@@ -90,6 +92,73 @@ def test_workspace_sessions_with_same_workdir_are_grouped(monkeypatch, tmp_path:
     assert len(items) == 1
     assert items[0].session_count == 2
     assert items[0].kind is ProjectCandidateKind.WORKSPACE_PROJECT
+
+
+def test_workspace_family_groups_sibling_workdirs_without_changing_candidates(monkeypatch, tmp_path: Path) -> None:
+    parent = tmp_path / "ayneye_external"
+    a = parent / "agent_a"
+    b = parent / "agent_b"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    store = LocalStore(tmp_path / "everstate.db")
+    sessions = [
+        _session(SourceEnvironment.CLAUDE_CODE, "a1", a),
+        _session(SourceEnvironment.CLAUDE_CODE, "a2", a),
+        _session(SourceEnvironment.CLAUDE_CODE, "b1", b),
+    ]
+    monkeypatch.setattr(onboarding, "discover_sessions", lambda source: sessions)
+
+    candidates = discover_project_candidates(store, sources=(SourceEnvironment.CLAUDE_CODE,))
+    families = discover_workspace_families(store, candidates)
+
+    assert {item.root_path for item in candidates} == {a.resolve(), b.resolve()}
+    assert len(families) == 1
+    assert families[0].root_path == parent.resolve()
+    assert len(families[0].members) == 2
+    assert families[0].session_count == 3
+
+
+def test_workspace_family_never_uses_home_or_downloads_as_root(monkeypatch, tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "everstate.db")
+    # Patch unsafe-root logic deterministically instead of depending on the CI home path.
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    sessions = [
+        _session(SourceEnvironment.CLAUDE_CODE, "a", left),
+        _session(SourceEnvironment.CLAUDE_CODE, "b", right),
+    ]
+    monkeypatch.setattr(onboarding, "discover_sessions", lambda source: sessions)
+    monkeypatch.setattr(onboarding, "_unsafe_family_root", lambda path: path.resolve() == tmp_path.resolve())
+
+    candidates = discover_project_candidates(store, sources=(SourceEnvironment.CLAUDE_CODE,))
+
+    assert discover_workspace_families(store, candidates) == []
+
+
+def test_register_workspace_family_creates_one_canonical_project(monkeypatch, tmp_path: Path) -> None:
+    parent = tmp_path / "family"
+    a = parent / "agent_a"
+    b = parent / "agent_b"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    store = LocalStore(tmp_path / "everstate.db")
+    sessions = [
+        _session(SourceEnvironment.CLAUDE_CODE, "a", a),
+        _session(SourceEnvironment.CLAUDE_CODE, "b", b),
+    ]
+    monkeypatch.setattr(onboarding, "discover_sessions", lambda source: sessions)
+    candidates = discover_project_candidates(store, sources=(SourceEnvironment.CLAUDE_CODE,))
+    family = discover_workspace_families(store, candidates)[0]
+
+    registered = register_workspace_family(store, family)
+
+    projects = list_registered_projects(store)
+    assert len(projects) == 1
+    assert registered.root_path == parent.resolve()
+    assert projects[0].root_path == parent.resolve()
+    assert store.latest_state(registered.project_id).version == 1
 
 
 def test_register_git_candidate_uses_canonical_project_id_and_initial_state(monkeypatch, tmp_path: Path) -> None:
