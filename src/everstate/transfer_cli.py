@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .session_transfer import build_session_transfer_review
 from .storage import LocalStore
 from .transfer_plan import SourceEnvironment, build_transfer_plan, list_registered_projects
 
@@ -35,11 +36,29 @@ def transfer_plan(
     source: SourceEnvironment = typer.Option(..., "--from", help="Source AI environment."),
     destination: str = typer.Option(..., "--to", help="Destination AI environment or provider key."),
     project: list[str] = typer.Option([], "--project", help="Project id, name, or root path. Repeat for multiple projects."),
+    session: str | None = typer.Option(None, "--session", help="Exact discovered source-session id. Supported for Codex and Claude Code."),
     all_projects: bool = typer.Option(False, "--all", help="Select every registered Everstate project."),
     confirm_all: bool = typer.Option(False, "--confirm-all", help="Required with --all to prevent accidental bulk transfer."),
 ) -> None:
     """Build and review a transfer plan. This command does not move project state yet."""
     try:
+        if session is not None:
+            if all_projects:
+                raise ValueError("--session cannot be combined with --all")
+            if len(project) > 1:
+                raise ValueError("A source session can be associated with only one explicit --project")
+            review = build_session_transfer_review(
+                _store(),
+                source=source,
+                destination=destination,
+                session_id=session,
+                project_selector=project[0] if project else None,
+            )
+            console.print(review.summary())
+            console.print(f"Association evidence: {review.association_detail}")
+            console.print("[yellow]Review only: no project state or session content was transferred.[/yellow]")
+            return
+
         plan = build_transfer_plan(
             _store(),
             source=source,
