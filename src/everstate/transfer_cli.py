@@ -182,6 +182,7 @@ def projects() -> None:
 
 @app.callback(invoke_without_command=True)
 def transfer_plan(
+    ctx: typer.Context,
     source: str | None = typer.Option(None, "--from", help="Source AI environment."),
     destination: str | None = typer.Option(None, "--to", help="Destination AI environment or provider key."),
     project: list[str] = typer.Option([], "--project", help="Project id, name, or root path. Repeat for multiple projects."),
@@ -191,6 +192,11 @@ def transfer_plan(
     non_interactive: bool = typer.Option(False, "--non-interactive", help="Disable prompts; all required choices must be supplied as flags."),
 ) -> None:
     """Build and review a transfer plan. This command does not move project state yet."""
+    # Typer callbacks run before subcommands. A concrete subcommand such as
+    # `everstate-transfer projects` must bypass the interactive transfer wizard.
+    if ctx.invoked_subcommand is not None:
+        return
+
     store = _store()
     try:
         if source is None:
