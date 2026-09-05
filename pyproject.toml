@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 everstate = "everstate.cli:app"
+everstate-doctor = "everstate.doctor:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/everstate"]
