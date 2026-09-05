@@ -15,13 +15,16 @@ def test_projects_is_a_real_subcommand(monkeypatch) -> None:
     result = runner.invoke(app, ["projects", "--full-paths"])
 
     assert result.exit_code == 0
-    assert "Claude Desktop local projects — source inventory" in result.stdout
+    assert "Claude Desktop local Cowork projects" in result.stdout
     assert "No local Claude Desktop/Cowork projects were found" in result.stdout
+    assert "cloud Projects" in result.stdout
+    assert "separate source surface" in result.stdout
     assert "Got unexpected extra argument" not in result.stdout
 
 
-def test_help_lists_projects_subcommand() -> None:
+def test_help_lists_projects_and_diagnose_subcommands() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
     assert "projects" in result.stdout
+    assert "diagnose" in result.stdout
