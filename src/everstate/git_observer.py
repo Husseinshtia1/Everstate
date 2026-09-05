@@ -35,23 +35,49 @@ def ensure_git_repo(root: Path) -> None:
         raise RuntimeError(f"{root} is not a Git repository")
 
 
+def _normalized_status_path(line: str) -> str | None:
+    if len(line) < 4:
+        return None
+    path = line[3:]
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path
+
+
+def _is_generated_or_internal(path: str) -> bool:
+    normalized = path.replace("\\", "/").lstrip("./")
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        return False
+
+    if parts[0] == ".everstate":
+        return True
+    if "__pycache__" in parts:
+        return True
+    if normalized.endswith((".pyc", ".pyo")):
+        return True
+    return False
+
+
 def snapshot(root: Path) -> GitSnapshot:
     root = root.resolve()
     ensure_git_repo(root)
 
     branch = _run_git(root, "branch", "--show-current", check=False) or "DETACHED"
     head = _run_git(root, "rev-parse", "HEAD", check=False) or None
-    status = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
+    raw_status = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
     diff_stat = _run_git(root, "diff", "--stat", "HEAD", check=False)
 
+    filtered_status_lines: list[str] = []
     modified_files: list[str] = []
-    for line in status.splitlines():
-        if len(line) >= 4:
-            path = line[3:]
-            if " -> " in path:
-                path = path.split(" -> ", 1)[1]
-            modified_files.append(path)
+    for line in raw_status.splitlines():
+        path = _normalized_status_path(line)
+        if path is None or _is_generated_or_internal(path):
+            continue
+        filtered_status_lines.append(line)
+        modified_files.append(path)
 
+    status = "\n".join(filtered_status_lines)
     return GitSnapshot(
         branch=branch,
         head=head,
