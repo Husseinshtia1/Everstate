@@ -15,6 +15,12 @@ app = typer.Typer(help="Inspect Claude Desktop/Cowork local project metadata onl
 console = Console()
 
 
+@app.callback()
+def desktop_cli() -> None:
+    """Inspect Claude Desktop/Cowork local project metadata only."""
+    return None
+
+
 def _store() -> LocalStore:
     return LocalStore(Path.home() / ".everstate" / "everstate.db")
 
