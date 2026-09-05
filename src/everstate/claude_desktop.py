@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -30,25 +29,50 @@ class ClaudeDesktopAssociation:
     detail: str
 
 
-def _desktop_roots(home: Path | None = None) -> tuple[Path, ...]:
+@dataclass(frozen=True)
+class ClaudeDesktopProfileDiagnosis:
+    profile_root: Path
+    exists: bool
+    local_agent_root_exists: bool
+    spaces_file_count: int
+    claude_ai_indexeddb_exists: bool
+    claude_ai_local_storage_exists: bool
+    cookies_store_exists: bool
+
+    @property
+    def has_local_cowork_inventory(self) -> bool:
+        return self.spaces_file_count > 0
+
+    @property
+    def has_cloud_renderer_profile(self) -> bool:
+        return self.claude_ai_indexeddb_exists or self.claude_ai_local_storage_exists
+
+
+def _profile_roots(home: Path | None = None) -> tuple[Path, ...]:
     home = (home or Path.home()).expanduser()
+    roots: list[Path] = [
+        home / ".config" / "Claude",
+        home / "Library" / "Application Support" / "Claude",
+    ]
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        roots.append(Path(appdata) / "Claude")
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return tuple(unique)
+
+
+def _desktop_roots(home: Path | None = None) -> tuple[Path, ...]:
     override = os.environ.get("EVERSTATE_CLAUDE_DESKTOP_ROOT")
     roots: list[Path] = []
     if override:
         roots.append(Path(override).expanduser())
-
-    # Official Claude Desktop/Cowork storage locations. We probe all plausible
-    # platform roots conservatively so tests and cross-platform copies work.
-    roots.extend(
-        [
-            home / ".config" / "Claude" / "local-agent-mode-sessions",
-            home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions",
-        ]
-    )
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        roots.append(Path(appdata) / "Claude" / "local-agent-mode-sessions")
-
+    roots.extend(root / "local-agent-mode-sessions" for root in _profile_roots(home))
     unique: list[Path] = []
     seen: set[str] = set()
     for root in roots:
@@ -63,8 +87,6 @@ def _iter_spaces_files(home: Path | None = None) -> Iterable[Path]:
     for root in _desktop_roots(home):
         if not root.exists() or not root.is_dir():
             continue
-        # Contract observed in current Claude Desktop/Cowork:
-        # local-agent-mode-sessions/<accountId>/<orgId>/spaces.json
         try:
             account_dirs = [entry for entry in root.iterdir() if entry.is_dir()]
         except OSError:
@@ -78,6 +100,38 @@ def _iter_spaces_files(home: Path | None = None) -> Iterable[Path]:
                 candidate = org_dir / "spaces.json"
                 if candidate.is_file():
                     yield candidate
+
+
+def diagnose_claude_desktop_profiles(home: Path | None = None) -> list[ClaudeDesktopProfileDiagnosis]:
+    """Inspect profile structure only. Never opens cookies, IndexedDB, Local Storage, or transcripts."""
+    diagnoses: list[ClaudeDesktopProfileDiagnosis] = []
+    for root in _profile_roots(home):
+        indexeddb = root / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb"
+        local_storage = root / "Local Storage" / "leveldb"
+        local_agent = root / "local-agent-mode-sessions"
+        spaces_count = 0
+        if local_agent.is_dir():
+            try:
+                for account in local_agent.iterdir():
+                    if not account.is_dir():
+                        continue
+                    for org in account.iterdir():
+                        if org.is_dir() and (org / "spaces.json").is_file():
+                            spaces_count += 1
+            except OSError:
+                pass
+        diagnoses.append(
+            ClaudeDesktopProfileDiagnosis(
+                profile_root=root,
+                exists=root.is_dir(),
+                local_agent_root_exists=local_agent.is_dir(),
+                spaces_file_count=spaces_count,
+                claude_ai_indexeddb_exists=indexeddb.is_dir(),
+                claude_ai_local_storage_exists=local_storage.is_dir(),
+                cookies_store_exists=(root / "Cookies").is_file(),
+            )
+        )
+    return diagnoses
 
 
 def _first_string(mapping: dict[str, Any], keys: tuple[str, ...]) -> str | None:
@@ -108,24 +162,14 @@ def _extract_path_value(value: Any) -> list[Path]:
 def _extract_folders(space: dict[str, Any]) -> tuple[Path, ...]:
     values: list[Path] = []
     for key in (
-        "folders",
-        "folderAssignments",
-        "folder_assignments",
-        "folderPaths",
-        "folder_paths",
-        "directories",
-        "roots",
-        "localFolders",
-        "local_folders",
+        "folders", "folderAssignments", "folder_assignments", "folderPaths", "folder_paths",
+        "directories", "roots", "localFolders", "local_folders",
     ):
         if key in space:
             values.extend(_extract_path_value(space[key]))
-
-    # Some versions keep one root directly on the space object.
     direct = _first_string(space, ("folderPath", "folder_path", "rootPath", "root_path", "cwd"))
     if direct:
         values.append(Path(direct).expanduser())
-
     unique: list[Path] = []
     seen: set[str] = set()
     for value in values:
@@ -145,7 +189,6 @@ def _space_records(document: Any) -> list[dict[str, Any]]:
         return [item for item in document if isinstance(item, dict)]
     if not isinstance(document, dict):
         return []
-
     for key in ("spaces", "projects", "items"):
         value = document.get(key)
         if isinstance(value, list):
@@ -159,9 +202,6 @@ def _space_records(document: Any) -> list[dict[str, Any]]:
                 copy.setdefault("id", str(record_id))
                 records.append(copy)
             return records
-
-    # Do not recursively inspect arbitrary renderer state: this adapter reads
-    # only the bounded top-level project collection in spaces.json.
     return []
 
 
@@ -172,14 +212,12 @@ def _read_spaces_file(path: Path, *, max_bytes: int = 4 * 1024 * 1024) -> list[C
         document = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, json.JSONDecodeError):
         return []
-
     try:
         org_id = path.parent.name or None
         account_id = path.parent.parent.name or None
     except IndexError:
         org_id = None
         account_id = None
-
     projects: list[ClaudeDesktopProject] = []
     for index, space in enumerate(_space_records(document), start=1):
         project_id = _first_string(space, ("id", "uuid", "spaceId", "space_id", "projectId", "project_id"))
@@ -188,16 +226,7 @@ def _read_spaces_file(path: Path, *, max_bytes: int = 4 * 1024 * 1024) -> list[C
             project_id = f"{path.parent.name}:space-{index}"
         if name is None:
             name = f"Unnamed Desktop project {index}"
-        projects.append(
-            ClaudeDesktopProject(
-                project_id=project_id,
-                name=name,
-                folders=_extract_folders(space),
-                storage_path=path,
-                account_id=account_id,
-                org_id=org_id,
-            )
-        )
+        projects.append(ClaudeDesktopProject(project_id, name, _extract_folders(space), path, account_id, org_id))
     return projects
 
 
@@ -221,20 +250,10 @@ def _contains(root: Path, child: Path) -> bool:
         return False
 
 
-def associate_claude_desktop_project(
-    desktop_project: ClaudeDesktopProject,
-    registered_projects: Iterable[RegisteredProject],
-) -> ClaudeDesktopAssociation:
+def associate_claude_desktop_project(desktop_project: ClaudeDesktopProject, registered_projects: Iterable[RegisteredProject]) -> ClaudeDesktopAssociation:
     registered = list(registered_projects)
     if not desktop_project.folders:
-        return ClaudeDesktopAssociation(
-            desktop_project,
-            "UNKNOWN",
-            None,
-            (),
-            "Claude Desktop project metadata exposed no local folder assignment; Everstate will not guess.",
-        )
-
+        return ClaudeDesktopAssociation(desktop_project, "UNKNOWN", None, (), "Claude Desktop project metadata exposed no local folder assignment; Everstate will not guess.")
     matches: dict[str, RegisteredProject] = {}
     evidence: list[str] = []
     for folder in desktop_project.folders:
@@ -247,28 +266,9 @@ def associate_claude_desktop_project(
             if exact or _contains(root, folder) or _contains(folder, root):
                 matches[project.project_id] = project
                 evidence.append(f"{folder} ↔ {root}")
-
     candidates = tuple(sorted(matches.values(), key=lambda item: item.project_id))
     if len(candidates) == 1:
-        return ClaudeDesktopAssociation(
-            desktop_project,
-            "VERIFIED",
-            candidates[0],
-            candidates,
-            "Unique local-folder match: " + "; ".join(evidence),
-        )
+        return ClaudeDesktopAssociation(desktop_project, "VERIFIED", candidates[0], candidates, "Unique local-folder match: " + "; ".join(evidence))
     if len(candidates) > 1:
-        return ClaudeDesktopAssociation(
-            desktop_project,
-            "AMBIGUOUS",
-            None,
-            candidates,
-            "Local folders match multiple canonical projects; Everstate will not guess.",
-        )
-    return ClaudeDesktopAssociation(
-        desktop_project,
-        "UNKNOWN",
-        None,
-        (),
-        "No registered Everstate project matches the Claude Desktop project's local folders.",
-    )
+        return ClaudeDesktopAssociation(desktop_project, "AMBIGUOUS", None, candidates, "Local folders match multiple canonical projects; Everstate will not guess.")
+    return ClaudeDesktopAssociation(desktop_project, "UNKNOWN", None, (), "No registered Everstate project matches the Claude Desktop project's local folders.")
