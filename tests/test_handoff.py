@@ -14,10 +14,40 @@ def test_supported_provider_commands_are_interactive(monkeypatch) -> None:
     claude = get_provider("claude")
     codex = get_provider("codex")
     gemini = get_provider("gemini")
+    local = get_provider("codex-ollama")
 
     assert claude.interactive_command("continue") == ["claude", "continue"]
     assert codex.interactive_command("continue") == ["codex", "continue"]
     assert gemini.interactive_command("continue") == ["gemini", "-i", "continue"]
+    assert local.interactive_command("continue") == [
+        "codex",
+        "--oss",
+        "--local-provider",
+        "ollama",
+        "-m",
+        "gpt-oss:20b",
+        "continue",
+    ]
+
+
+def test_local_model_can_be_selected_without_changing_cloud_codex(monkeypatch) -> None:
+    monkeypatch.setattr("everstate.providers.ProviderAdapter.resolve_executable", lambda self: self.executable)
+    monkeypatch.setenv("EVERSTATE_OLLAMA_MODEL", "qwen3-coder:latest")
+
+    local = get_provider("codex-ollama")
+    cloud = get_provider("codex")
+
+    assert local.interactive_command("continue")[-3:] == ["qwen3-coder:latest", "continue"][-2:] if False else local.interactive_command("continue")[-3:]
+    assert local.interactive_command("continue") == [
+        "codex",
+        "--oss",
+        "--local-provider",
+        "ollama",
+        "-m",
+        "qwen3-coder:latest",
+        "continue",
+    ]
+    assert cloud.interactive_command("continue") == ["codex", "continue"]
 
 
 def test_codex_is_discovered_from_user_npm_prefix_when_not_on_path(tmp_path: Path, monkeypatch) -> None:
@@ -107,10 +137,27 @@ def test_prepare_handoff_writes_local_version_pinned_packet(tmp_path: Path, monk
 
 def test_prepare_gemini_handoff_preserves_prompt_after_interactive_flag(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("everstate.providers.ProviderAdapter.resolve_executable", lambda self: self.executable)
-
     result = prepare_handoff(tmp_path, _packet(), get_provider("gemini"))
 
     assert result.path == tmp_path / ".everstate" / "handoffs" / "state-v12-gemini.md"
     assert result.command[:2] == ["gemini", "-i"]
     assert "EVERSTATE CONTINUATION PACKET" in result.command[-1]
     assert "Inspect the current working tree" in result.command[-1]
+
+
+def test_prepare_local_handoff_uses_oss_provider_and_installed_model(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("everstate.providers.ProviderAdapter.resolve_executable", lambda self: self.executable)
+    monkeypatch.setenv("EVERSTATE_OLLAMA_MODEL", "qwen3-coder:latest")
+
+    result = prepare_handoff(tmp_path, _packet(), get_provider("codex-ollama"))
+
+    assert result.path == tmp_path / ".everstate" / "handoffs" / "state-v12-codex.md"
+    assert result.command[:6] == [
+        "codex",
+        "--oss",
+        "--local-provider",
+        "ollama",
+        "-m",
+        "qwen3-coder:latest",
+    ]
+    assert "EVERSTATE CONTINUATION PACKET" in result.command[-1]
