@@ -21,7 +21,7 @@ def _cache(home: Path, payload: bytes) -> Path:
 
 def test_layout_counts_proximity_without_exposing_values(tmp_path: Path) -> None:
     project_id = b"123e4567-e89b-42d3-a456-426614174000"
-    payload = b"project" + b"x" * 100 + project_id + b"y" * 100 + b"title"
+    payload = b"project " + b"x" * 100 + project_id + b" " + b"y" * 100 + b" title"
     _cache(tmp_path, payload)
 
     item = diagnose_claude_cloud_layout(tmp_path)[0]
@@ -75,5 +75,5 @@ def test_cloud_layout_cli_prints_counts_only(monkeypatch, tmp_path: Path) -> Non
     assert result.exit_code == 0
     assert "Claude Desktop cloud cache layout" in result.stdout
     assert "23" in result.stdout
-    assert "P≤1.5K" in result.stdout
+    assert "A/U = ASCII/UTF-16LE marker counts" in result.stdout
     assert "123e4567" not in result.stdout
