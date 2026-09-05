@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .claude_desktop import associate_claude_desktop_project, discover_claude_desktop_projects
 from .session_transfer import build_session_transfer_review
 from .source_discovery import AssociationStatus, associate_session, discover_sessions
 from .storage import LocalStore
@@ -123,7 +124,74 @@ def _prompt_project_selection(store: LocalStore, *, allow_many: bool = True) -> 
     raise ValueError("Unknown project scope selection")
 
 
+def _prompt_claude_desktop_project(store: LocalStore) -> tuple[str | None, list[str], bool, bool]:
+    desktop_projects = discover_claude_desktop_projects()
+    if not desktop_projects:
+        raise ValueError(
+            "No local Claude Desktop/Cowork projects were found in Desktop storage. "
+            "Everstate will not substitute Claude Code sessions or registered projects for this source."
+        )
+
+    registered = list_registered_projects(store)
+    associations = [associate_claude_desktop_project(item, registered) for item in desktop_projects]
+    table = Table(title="Claude Desktop projects — actual source inventory")
+    table.add_column("#")
+    table.add_column("Desktop project")
+    table.add_column("Desktop ID")
+    table.add_column("Folders")
+    table.add_column("Association")
+    table.add_column("Everstate project")
+    for index, association in enumerate(associations, start=1):
+        item = association.desktop_project
+        table.add_row(
+            str(index),
+            item.name,
+            item.project_id,
+            str(len(item.folders)),
+            association.status,
+            association.project.name if association.project else "—",
+        )
+    console.print(table)
+
+    value = typer.prompt("Claude Desktop project number").strip()
+    if not value.isdigit() or not 1 <= int(value) <= len(associations):
+        raise ValueError("Claude Desktop project selection must be one of the displayed numbers")
+    association = associations[int(value) - 1]
+    selected = association.desktop_project
+
+    console.print(f"[bold]Selected Desktop project:[/bold] {selected.name} [{selected.project_id}]")
+    if selected.folders:
+        console.print("Desktop local folders:")
+        for folder in selected.folders:
+            console.print(f"  - {folder}")
+    else:
+        console.print("[yellow]Desktop metadata exposes no local folder for this project.[/yellow]")
+
+    if association.status == "VERIFIED" and association.project is not None:
+        console.print(
+            f"[green]Verified canonical mapping:[/green] {association.project.name} "
+            f"[{association.project.project_id}]"
+        )
+        return None, [association.project.project_id], False, False
+
+    console.print(
+        f"[yellow]Desktop project association is {association.status}. "
+        "Choose the canonical Everstate project explicitly; Everstate will not infer it.[/yellow]"
+    )
+    mapped, _, _ = _prompt_project_selection(store, allow_many=False)
+    canonical = next(project for project in registered if project.project_id == mapped[0])
+    if not typer.confirm(
+        f"Map Claude Desktop project '{selected.name}' to canonical project '{canonical.name}' for this transfer?",
+        default=False,
+    ):
+        raise ValueError("Claude Desktop project mapping cancelled")
+    return None, mapped, False, False
+
+
 def _prompt_session_or_projects(store: LocalStore, source: SourceEnvironment) -> tuple[str | None, list[str], bool, bool]:
+    if source is SourceEnvironment.CLAUDE_DESKTOP:
+        return _prompt_claude_desktop_project(store)
+
     if source not in {SourceEnvironment.CODEX, SourceEnvironment.CLAUDE_CODE}:
         projects, all_projects, confirm_all = _prompt_project_selection(store)
         return None, projects, all_projects, confirm_all
@@ -192,8 +260,6 @@ def transfer_plan(
     non_interactive: bool = typer.Option(False, "--non-interactive", help="Disable prompts; all required choices must be supplied as flags."),
 ) -> None:
     """Build and review a transfer plan. This command does not move project state yet."""
-    # Typer callbacks run before subcommands. A concrete subcommand such as
-    # `everstate-transfer projects` must bypass the interactive transfer wizard.
     if ctx.invoked_subcommand is not None:
         return
 

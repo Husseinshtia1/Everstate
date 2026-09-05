@@ -5,6 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 import everstate.transfer_cli as transfer_cli
+from everstate.claude_desktop import ClaudeDesktopProject
 from everstate.storage import LocalStore
 from everstate.transfer_cli import app
 
@@ -34,6 +35,47 @@ def test_wizard_asks_source_project_and_destination(monkeypatch, tmp_path: Path)
     assert "PROJECT COUNT: 1" in result.stdout
     assert "DESTINATION: auto" in result.stdout
     assert "Planning only" in result.stdout
+
+
+def test_claude_desktop_source_uses_actual_desktop_inventory(monkeypatch, tmp_path: Path) -> None:
+    store = _store_with_projects(tmp_path)
+    canonical_root = tmp_path / "project-1"
+    desktop_project = ClaudeDesktopProject(
+        project_id="desktop-space-1",
+        name="Actual Desktop Project",
+        folders=(canonical_root.resolve(),),
+        storage_path=tmp_path / "spaces.json",
+    )
+    monkeypatch.setattr(transfer_cli, "_store", lambda: store)
+    monkeypatch.setattr(transfer_cli, "discover_claude_desktop_projects", lambda: [desktop_project])
+
+    # Source 2 = claude-desktop, Desktop project 1, destination 1 = auto.
+    result = runner.invoke(app, input="2\n1\n1\n")
+
+    assert result.exit_code == 0
+    assert "Claude Desktop projects — actual source inventory" in result.stdout
+    assert "Actual Desktop Project" in result.stdout
+    assert "Verified canonical mapping" in result.stdout
+    assert "SOURCE: claude-desktop" in result.stdout
+    assert "PROJECT COUNT: 1" in result.stdout
+    assert "Project 1" in result.stdout
+    assert "Everstate registered projects" not in result.stdout
+
+
+def test_claude_desktop_without_inventory_does_not_fallback_to_registry(monkeypatch, tmp_path: Path) -> None:
+    store = _store_with_projects(tmp_path)
+    monkeypatch.setattr(transfer_cli, "_store", lambda: store)
+    monkeypatch.setattr(transfer_cli, "discover_claude_desktop_projects", lambda: [])
+
+    result = runner.invoke(app, input="2\n")
+
+    assert result.exit_code != 0
+    assert "No local Claude Desktop/Cowork projects were found" in result.output
+    # Behavioral contract: the registered canonical project must never be shown
+    # as a substitute Desktop source item when Desktop inventory is empty.
+    assert "Everstate registered projects" not in result.output
+    assert "Project 1" not in result.output
+    assert "Where do you want to continue?" not in result.output
 
 
 def test_projects_subcommand_bypasses_interactive_wizard(monkeypatch, tmp_path: Path) -> None:

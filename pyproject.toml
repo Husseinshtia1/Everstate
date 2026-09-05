@@ -31,6 +31,7 @@ everstate-transfer = "everstate.transfer_cli:app"
 everstate-sources = "everstate.sources_cli:app"
 everstate-try = "everstate.try_cli:app"
 everstate-projects = "everstate.projects_cli:app"
+everstate-desktop = "everstate.claude_desktop_cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/everstate"]
