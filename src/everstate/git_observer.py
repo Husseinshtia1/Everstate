@@ -45,7 +45,9 @@ def _normalized_status_path(line: str) -> str | None:
 
 
 def _is_generated_or_internal(path: str) -> bool:
-    normalized = path.replace("\\", "/").lstrip("./")
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
     parts = [part for part in normalized.split("/") if part]
     if not parts:
         return False
