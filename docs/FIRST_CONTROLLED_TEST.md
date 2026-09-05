@@ -12,13 +12,14 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-## 1. Verify the CLI
+## 1. Verify the CLI and preflight command
 
 ```bash
 everstate --help
+everstate-doctor --help
 ```
 
-Expected commands include at least:
+Expected Everstate commands include at least:
 
 - providers
 - continue
@@ -27,23 +28,7 @@ Expected commands include at least:
 - acceptance-seed
 - acceptance-evaluate
 
-## 2. Provider preflight
-
-Passive, no project-state transmission:
-
-```bash
-everstate providers
-```
-
-Optional active health checks:
-
-```bash
-everstate providers --active
-```
-
-Cloud active probes may consume a small amount of provider usage. The local Ollama probe may run the configured local model.
-
-## 3. Controlled benchmark reset
+## 2. Controlled benchmark reset
 
 ```bash
 rm -rf /tmp/everstate-auth-test
@@ -65,7 +50,7 @@ python verify.py
 
 Expected: failure.
 
-## 4. Seed interrupted state
+## 3. Seed interrupted state
 
 ```bash
 everstate acceptance-seed \
@@ -77,6 +62,43 @@ Inspect what the receiving AI will get:
 
 ```bash
 everstate packet /tmp/everstate-auth-test
+```
+
+## 4. Run the release preflight gate
+
+Passive preflight sends no project state to providers:
+
+```bash
+everstate-doctor \
+  --path /tmp/everstate-auth-test \
+  --require-ai
+```
+
+For the controlled AI handoff test, continue only when the result is:
+
+```text
+READY_FOR_AI_TEST
+```
+
+`PORTABLE_ONLY` means Everstate state/export is healthy but no integrated AI target is currently ready. `BLOCKED` means the project/state layer itself needs attention before testing.
+
+Optional active provider health checks:
+
+```bash
+everstate-doctor \
+  --path /tmp/everstate-auth-test \
+  --active \
+  --require-ai
+```
+
+Cloud active checks may consume a small amount of provider usage. The local Ollama active check may run the configured local model. No project state is used in the health prompt.
+
+Machine-readable report:
+
+```bash
+everstate-doctor \
+  --path /tmp/everstate-auth-test \
+  --json
 ```
 
 ## 5. Inspect routing before launch
@@ -98,11 +120,13 @@ everstate continue \
   --dry-run
 ```
 
-Do not launch yet if the provider states or ranking look wrong.
+Do not launch if doctor and routing disagree about the selected target.
 
 ## 6. Launch the selected provider
 
-For the first controlled receiving-side test, use the provider that preflight reports READY. For Codex cloud:
+For the first controlled receiving-side test, use a provider that doctor reports ready.
+
+Codex cloud:
 
 ```bash
 everstate continue \
@@ -110,7 +134,7 @@ everstate continue \
   --target codex
 ```
 
-For Gemini CLI:
+Gemini CLI:
 
 ```bash
 everstate continue \
@@ -118,7 +142,7 @@ everstate continue \
   --target gemini
 ```
 
-For local Codex + Ollama, only when reported READY:
+Local Codex + Ollama, only when reported READY:
 
 ```bash
 everstate continue \
