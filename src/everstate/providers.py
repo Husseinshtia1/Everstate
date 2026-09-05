@@ -35,6 +35,7 @@ class ProviderAdapter:
     prompt_args: tuple[str, ...] = ()
     model_env: str | None = None
     default_model: str | None = None
+    handoff_slug: str | None = None
 
     def resolve_executable(self) -> str | None:
         on_path = shutil.which(self.executable)
@@ -80,6 +81,10 @@ class ProviderAdapter:
         )
         return completed.returncode
 
+    @property
+    def handoff_name(self) -> str:
+        return self.handoff_slug or self.executable
+
 
 PROVIDERS: dict[str, ProviderAdapter] = {
     "claude": ProviderAdapter(name="Claude Code", executable="claude"),
@@ -91,6 +96,7 @@ PROVIDERS: dict[str, ProviderAdapter] = {
         prompt_args=("--oss", "--local-provider", "ollama"),
         model_env="EVERSTATE_OLLAMA_MODEL",
         default_model="gpt-oss:20b",
+        handoff_slug="codex-ollama",
     ),
 }
 
