@@ -6,6 +6,13 @@ from pathlib import Path
 
 
 _UUID_ASCII = re.compile(rb"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
+_UUID_UTF16LE = re.compile(
+    rb"(?i)(?:[0-9a-f]\x00){8}-\x00"
+    rb"(?:[0-9a-f]\x00){4}-\x00"
+    rb"[1-5]\x00(?:[0-9a-f]\x00){3}-\x00"
+    rb"[89ab]\x00(?:[0-9a-f]\x00){3}-\x00"
+    rb"(?:[0-9a-f]\x00){12}"
+)
 _PROJECT_ASCII = re.compile(rb"(?i)project")
 _NAME_ASCII = re.compile(rb"(?i)(?:name|title|display_name|displayName)")
 
@@ -31,35 +38,32 @@ class ClaudeCloudLayoutDiagnosis:
 
 def _roots(home: Path | None = None) -> tuple[tuple[Path, Path], ...]:
     home = (home or Path.home()).expanduser()
-    pairs = [
-        (home / ".config" / "Claude", home / ".config" / "Claude" / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb"),
+    return (
+        (
+            home / ".config" / "Claude",
+            home / ".config" / "Claude" / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb",
+        ),
         (
             home / "Library" / "Application Support" / "Claude",
             home / "Library" / "Application Support" / "Claude" / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb",
         ),
-    ]
-    return tuple(pairs)
+    )
 
 
 def _utf16le_literal(text: str) -> bytes:
-    return text.encode("utf-16le")
+    return text.lower().encode("utf-16le")
 
 
 def _count_near(positions_a: list[int], positions_b: list[int], radius: int) -> int:
     if not positions_a or not positions_b:
         return 0
-    positions_b = sorted(positions_b)
+    ordered_b = sorted(positions_b)
     count = 0
     j = 0
     for pos in sorted(positions_a):
-        while j < len(positions_b) and positions_b[j] < pos - radius:
+        while j < len(ordered_b) and ordered_b[j] < pos - radius:
             j += 1
-        k = j
-        hit = False
-        while k < len(positions_b) and positions_b[k] <= pos + radius:
-            hit = True
-            break
-        if hit:
+        if j < len(ordered_b) and ordered_b[j] <= pos + radius:
             count += 1
     return count
 
@@ -120,23 +124,16 @@ def diagnose_claude_cloud_layout(
             project_ascii_positions.extend(global_offset + match.start() for match in _PROJECT_ASCII.finditer(data))
             name_ascii_positions.extend(global_offset + match.start() for match in _NAME_ASCII.finditer(data))
 
-            # UTF-16LE counts are intentionally literal/structural only. UUIDs are detected
-            # by decoding ASCII UUID candidates to their UTF-16LE byte form when possible.
             lowered = data.lower()
+            uuid_utf16le += len(_UUID_UTF16LE.findall(data))
             project_utf16le += lowered.count(_utf16le_literal("project"))
             name_utf16le += sum(
                 lowered.count(_utf16le_literal(marker))
                 for marker in ("name", "title", "display_name", "displayname")
             )
 
-            # Detect generic UTF-16LE UUID shapes without extracting or printing values.
-            # Pattern: hex ASCII bytes separated by NULs, with normal UUID hyphens.
-            utf16_uuid_pattern = re.compile(
-                rb"(?i)(?:[0-9a-f]\x00){8}-\x00(?:[0-9a-f]\x00){4}-\x00(?:[1-5][0-9a-f]{3})".replace(rb"[0-9a-f]{3}", rb"(?:[0-9a-f]\x00){3}")
-                + rb"-\x00(?:[89ab]\x00)(?:[0-9a-f]\x00){3}-\x00(?:[0-9a-f]\x00){12}"
-            )
-            uuid_utf16le += len(utf16_uuid_pattern.findall(data))
-            global_offset += len(data) + 1
+            # Keep files separated so adjacency is never inferred across a file boundary.
+            global_offset += len(data) + 1024 * 1024
 
         results.append(
             ClaudeCloudLayoutDiagnosis(
