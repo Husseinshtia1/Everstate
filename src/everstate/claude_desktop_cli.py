@@ -11,6 +11,7 @@ from .claude_desktop import (
     associate_claude_desktop_project,
     diagnose_claude_desktop_profiles,
     discover_claude_desktop_projects,
+    probe_claude_cloud_cache,
 )
 from .storage import LocalStore
 from .transfer_plan import list_registered_projects
@@ -59,6 +60,48 @@ def diagnose() -> None:
         console.print("[yellow]No local Cowork spaces.json inventory was detected.[/yellow]")
     console.print(
         "[dim]Diagnosis checks only file/directory existence and counts. It does not open Cookies, IndexedDB, Local Storage, project instructions, or conversations.[/dim]"
+    )
+
+
+@app.command("cloud-probe")
+def cloud_probe() -> None:
+    """Probe claude.ai IndexedDB for structural project markers without printing stored values."""
+    items = probe_claude_cloud_cache()
+    table = Table(title="Claude Desktop cloud cache probe — counts only")
+    table.add_column("Profile root")
+    table.add_column("Files", justify="right")
+    table.add_column("Bytes", justify="right")
+    table.add_column("project", justify="right")
+    table.add_column("/projects/", justify="right")
+    table.add_column("project_id", justify="right")
+    table.add_column("project_uuid", justify="right")
+    table.add_column("api/organizations", justify="right")
+    table.add_column("UUID patterns", justify="right")
+    table.add_column("Truncated")
+    for item in items:
+        table.add_row(
+            str(item.profile_root),
+            str(item.files_scanned),
+            str(item.bytes_scanned),
+            str(item.marker_counts.get("project", 0)),
+            str(item.marker_counts.get("projects_path", 0)),
+            str(item.marker_counts.get("project_id", 0)),
+            str(item.marker_counts.get("project_uuid", 0)),
+            str(item.marker_counts.get("api_organizations", 0)),
+            str(item.uuid_pattern_count),
+            "YES" if item.truncated else "NO",
+        )
+    console.print(table)
+    if any(item.has_project_markers for item in items):
+        console.print(
+            "[green]Project-related markers exist in the local claude.ai IndexedDB cache. A metadata-only local cloud-project extractor may be feasible.[/green]"
+        )
+    else:
+        console.print(
+            "[yellow]No convincing project markers were found in the bounded local cache scan. Everstate will not infer project names from this result.[/yellow]"
+        )
+    console.print(
+        "[dim]This probe emits counts only. It does not print cached values, project names, messages, cookies, tokens, instructions, or conversation text.[/dim]"
     )
 
 
