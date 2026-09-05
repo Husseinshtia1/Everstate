@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -46,6 +47,24 @@ class ClaudeDesktopProfileDiagnosis:
     @property
     def has_cloud_renderer_profile(self) -> bool:
         return self.claude_ai_indexeddb_exists or self.claude_ai_local_storage_exists
+
+
+@dataclass(frozen=True)
+class ClaudeCloudCacheProbe:
+    profile_root: Path
+    indexeddb_root: Path
+    files_scanned: int
+    bytes_scanned: int
+    marker_counts: dict[str, int]
+    uuid_pattern_count: int
+    truncated: bool
+
+    @property
+    def has_project_markers(self) -> bool:
+        return any(
+            self.marker_counts.get(key, 0) > 0
+            for key in ("project", "projects_path", "project_id", "api_organizations")
+        )
 
 
 def _profile_roots(home: Path | None = None) -> tuple[Path, ...]:
@@ -132,6 +151,99 @@ def diagnose_claude_desktop_profiles(home: Path | None = None) -> list[ClaudeDes
             )
         )
     return diagnoses
+
+
+_UUID_PATTERN = re.compile(
+    rb"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b"
+)
+_CLOUD_MARKERS: tuple[tuple[str, bytes], ...] = (
+    ("project", b"project"),
+    ("projects_path", b"/projects/"),
+    ("project_id", b"project_id"),
+    ("project_uuid", b"project_uuid"),
+    ("api_organizations", b"api/organizations"),
+    ("organization", b"organization"),
+)
+
+
+def probe_claude_cloud_cache(
+    home: Path | None = None,
+    *,
+    max_total_bytes: int = 32 * 1024 * 1024,
+    max_file_bytes: int = 8 * 1024 * 1024,
+) -> list[ClaudeCloudCacheProbe]:
+    """Count structural markers in Claude's claude.ai IndexedDB without emitting stored values.
+
+    This intentionally does not parse or print project names, messages, cookies, tokens,
+    instructions, or arbitrary cached records. It is a bounded binary marker probe used
+    only to decide whether a local metadata extractor is plausible.
+    """
+    probes: list[ClaudeCloudCacheProbe] = []
+    for profile_root in _profile_roots(home):
+        indexeddb_root = profile_root / "IndexedDB" / "https_claude.ai_0.indexeddb.leveldb"
+        if not indexeddb_root.is_dir():
+            probes.append(
+                ClaudeCloudCacheProbe(
+                    profile_root=profile_root,
+                    indexeddb_root=indexeddb_root,
+                    files_scanned=0,
+                    bytes_scanned=0,
+                    marker_counts={key: 0 for key, _ in _CLOUD_MARKERS},
+                    uuid_pattern_count=0,
+                    truncated=False,
+                )
+            )
+            continue
+
+        counts = {key: 0 for key, _ in _CLOUD_MARKERS}
+        files_scanned = 0
+        bytes_scanned = 0
+        uuid_count = 0
+        truncated = False
+        try:
+            files = sorted(path for path in indexeddb_root.iterdir() if path.is_file())
+        except OSError:
+            files = []
+
+        for path in files:
+            if bytes_scanned >= max_total_bytes:
+                truncated = True
+                break
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            remaining = max_total_bytes - bytes_scanned
+            read_limit = min(size, max_file_bytes, remaining)
+            if read_limit <= 0:
+                truncated = True
+                break
+            try:
+                with path.open("rb") as handle:
+                    data = handle.read(read_limit)
+            except OSError:
+                continue
+            files_scanned += 1
+            bytes_scanned += len(data)
+            if size > read_limit:
+                truncated = True
+            lowered = data.lower()
+            for key, marker in _CLOUD_MARKERS:
+                counts[key] += lowered.count(marker)
+            uuid_count += len(_UUID_PATTERN.findall(data))
+
+        probes.append(
+            ClaudeCloudCacheProbe(
+                profile_root=profile_root,
+                indexeddb_root=indexeddb_root,
+                files_scanned=files_scanned,
+                bytes_scanned=bytes_scanned,
+                marker_counts=counts,
+                uuid_pattern_count=uuid_count,
+                truncated=truncated,
+            )
+        )
+    return probes
 
 
 def _first_string(mapping: dict[str, Any], keys: tuple[str, ...]) -> str | None:
