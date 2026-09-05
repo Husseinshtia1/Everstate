@@ -6,7 +6,14 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .project_onboarding import ProjectCandidate, discover_project_candidates, register_project_candidate
+from .project_onboarding import (
+    ProjectCandidate,
+    WorkspaceFamily,
+    discover_project_candidates,
+    discover_workspace_families,
+    register_project_candidate,
+    register_workspace_family,
+)
 from .storage import LocalStore
 from .transfer_plan import SourceEnvironment, list_registered_projects
 
@@ -18,7 +25,7 @@ def _store() -> LocalStore:
     return LocalStore(Path.home() / ".everstate" / "everstate.db")
 
 
-def _print_candidates(items: list[ProjectCandidate]) -> None:
+def _print_candidates(items: list[ProjectCandidate], *, full_paths: bool = False) -> None:
     table = Table(title="Everstate project onboarding candidates")
     table.add_column("#")
     table.add_column("Project")
@@ -38,6 +45,40 @@ def _print_candidates(items: list[ProjectCandidate]) -> None:
             "REGISTERED" if item.already_registered else "NEW",
         )
     console.print(table)
+    if full_paths:
+        console.print("[bold]Full candidate paths[/bold]")
+        for index, item in enumerate(items, start=1):
+            console.print(f"{index}. {item.root_path}")
+
+
+def _print_families(items: list[WorkspaceFamily]) -> None:
+    if not items:
+        console.print("[dim]No safe workspace-family suggestions were found.[/dim]")
+        return
+    table = Table(title="Suggested workspace families — review only")
+    table.add_column("#")
+    table.add_column("Family root")
+    table.add_column("Members", justify="right")
+    table.add_column("Sessions", justify="right")
+    table.add_column("Sources")
+    table.add_column("Status")
+    for index, item in enumerate(items, start=1):
+        table.add_row(
+            str(index),
+            str(item.root_path),
+            str(len(item.members)),
+            str(item.session_count),
+            ", ".join(source.value for source in item.sources),
+            "REGISTERED" if item.already_registered else "SUGGESTED",
+        )
+    console.print(table)
+    for index, item in enumerate(items, start=1):
+        console.print(f"[bold]Family {index}: {item.root_path}[/bold]")
+        for member in item.members:
+            console.print(f"  - {member.root_path} ({member.session_count} session(s))")
+    console.print(
+        "[yellow]Workspace families are suggestions only. A parent root is never registered automatically.[/yellow]"
+    )
 
 
 @app.command("list")
@@ -55,12 +96,53 @@ def list_projects() -> None:
 @app.command("discover")
 def discover(
     source: list[SourceEnvironment] = typer.Option([], "--from", help="Source(s) to inspect. Repeat to combine. Defaults to Codex + Claude Code."),
+    full_paths: bool = typer.Option(False, "--full-paths", help="Print every candidate root without table truncation."),
+    families: bool = typer.Option(True, "--families/--no-families", help="Show conservative workspace-family suggestions."),
 ) -> None:
     """Show canonical Git/workspace projects inferred from source-session working directories."""
     sources = tuple(source) if source else (SourceEnvironment.CODEX, SourceEnvironment.CLAUDE_CODE)
-    items = discover_project_candidates(_store(), sources=sources)
-    _print_candidates(items)
+    store = _store()
+    items = discover_project_candidates(store, sources=sources)
+    _print_candidates(items, full_paths=full_paths)
     console.print("[dim]Git roots are preferred when available; otherwise exact existing working directories are proposed as workspace projects. Nothing is registered automatically.[/dim]")
+    if families:
+        _print_families(discover_workspace_families(store, items))
+
+
+@app.command("onboard-family")
+def onboard_family(
+    source: list[SourceEnvironment] = typer.Option([], "--from", help="Source(s) to inspect. Repeat to combine. Defaults to Codex + Claude Code."),
+) -> None:
+    """Review and register one suggested workspace-family root explicitly."""
+    sources = tuple(source) if source else (SourceEnvironment.CODEX, SourceEnvironment.CLAUDE_CODE)
+    store = _store()
+    candidates = discover_project_candidates(store, sources=sources)
+    families = discover_workspace_families(store, candidates)
+    _print_families(families)
+    selectable = [family for family in families if not family.already_registered]
+    if not selectable:
+        console.print("[green]No unregistered workspace-family suggestions are available.[/green]")
+        return
+
+    value = typer.prompt("Family number to register").strip()
+    if not value.isdigit() or not 1 <= int(value) <= len(families):
+        raise typer.BadParameter("Family number must match the displayed table")
+    family = families[int(value) - 1]
+    if family.already_registered:
+        raise typer.BadParameter("That workspace family is already registered")
+
+    console.print("[bold]Canonical workspace review[/bold]")
+    console.print(f"Root to register: {family.root_path}")
+    console.print(f"Member workspaces: {len(family.members)}")
+    console.print(f"Observed sessions: {family.session_count}")
+    if not typer.confirm("Use this parent directory as ONE canonical Everstate project?", default=False):
+        raise typer.Abort()
+    if not typer.confirm("Confirm registration of this workspace-family root", default=False):
+        raise typer.Abort()
+
+    project = register_workspace_family(store, family)
+    console.print(f"[green]Registered workspace family as one canonical project.[/green]")
+    console.print(f"- {project.name} [{project.project_id}] {project.root_path}")
 
 
 @app.command("onboard")
@@ -71,10 +153,16 @@ def onboard(
     sources = tuple(source) if source else (SourceEnvironment.CODEX, SourceEnvironment.CLAUDE_CODE)
     items = discover_project_candidates(_store(), sources=sources)
     new_items = [item for item in items if not item.already_registered]
-    _print_candidates(items)
+    _print_candidates(items, full_paths=True)
     if not new_items:
         console.print("[green]No unregistered projects were found.[/green]")
         return
+
+    families = discover_workspace_families(_store(), items)
+    if families:
+        console.print(
+            "[yellow]Workspace-family suggestions exist. Review `everstate-projects discover --full-paths` or use `everstate-projects onboard-family` before registering sibling workspaces separately.[/yellow]"
+        )
 
     console.print("[bold]What do you want to register?[/bold]")
     console.print("  1. One project")
@@ -108,6 +196,10 @@ def onboard(
         if not selected:
             raise typer.BadParameter("No new projects were selected")
     elif choice == "3":
+        if families:
+            raise typer.BadParameter(
+                "Bulk onboarding is blocked while workspace-family suggestions exist; review families first"
+            )
         if not typer.confirm(f"Register ALL {len(new_items)} new projects?", default=False):
             raise typer.Abort()
         selected = new_items
