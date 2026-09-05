@@ -36,6 +36,8 @@ everstate-cloud-projects = "everstate.claude_cloud_cli:app"
 everstate-open-claude-project = "everstate.claude_project_open_cli:app"
 everstate-claude-renderer-probe = "everstate.claude_renderer_cli:app"
 everstate-claude-atspi-probe = "everstate.claude_atspi_cli:app"
+everstate-mcp = "everstate.mcp_server:main"
+everstate-emergency-failover = "everstate.emergency_failover_cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/everstate"]
