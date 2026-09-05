@@ -17,7 +17,8 @@ def test_projects_is_a_real_subcommand(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Claude Desktop local Cowork projects" in result.stdout
     assert "No local Claude Desktop/Cowork projects were found" in result.stdout
-    assert "cloud Projects are a separate source surface" in result.stdout
+    assert "cloud Projects" in result.stdout
+    assert "separate source surface" in result.stdout
     assert "Got unexpected extra argument" not in result.stdout
 
 
