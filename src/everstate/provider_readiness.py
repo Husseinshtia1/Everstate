@@ -86,6 +86,8 @@ def classify_provider_failure(output: str, returncode: int) -> ProviderState:
     if (
         "usage limit" in text
         or "limit reached" in text
+        or "weekly limit" in text
+        or "you've hit your" in text and "limit" in text
         or "quota exhausted" in text
         or "quota_exhausted" in text
         or "quota exceeded" in text
@@ -212,8 +214,6 @@ def probe_executable_provider(
     *,
     active: bool = False,
 ) -> ProviderProbeResult:
-    # Keep the legacy/public probe entry point safe for failure-aware routing:
-    # provider variants with local runtime requirements must never fall back to a generic executable-only READY.
     if key == "codex-ollama":
         return probe_codex_ollama(provider, active=active)
 
