@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from .claude_cloud_layout import diagnose_claude_cloud_layout
 from .claude_desktop import (
     associate_claude_desktop_project,
     diagnose_claude_desktop_profiles,
@@ -31,7 +32,6 @@ def _store() -> LocalStore:
 
 @app.command("diagnose")
 def diagnose() -> None:
-    """Show which Claude Desktop storage surfaces exist without opening sensitive stores."""
     items = diagnose_claude_desktop_profiles()
     table = Table(title="Claude Desktop source diagnosis — structure only")
     table.add_column("Profile root")
@@ -53,19 +53,14 @@ def diagnose() -> None:
         )
     console.print(table)
     if any(item.has_cloud_renderer_profile for item in items):
-        console.print(
-            "[cyan]A claude.ai renderer profile exists. The projects visible in Claude Desktop may be cloud Projects rather than local Cowork spaces.[/cyan]"
-        )
+        console.print("[cyan]A claude.ai renderer profile exists. The projects visible in Claude Desktop may be cloud Projects rather than local Cowork spaces.[/cyan]")
     if not any(item.has_local_cowork_inventory for item in items):
         console.print("[yellow]No local Cowork spaces.json inventory was detected.[/yellow]")
-    console.print(
-        "[dim]Diagnosis checks only file/directory existence and counts. It does not open Cookies, IndexedDB, Local Storage, project instructions, or conversations.[/dim]"
-    )
+    console.print("[dim]Diagnosis checks only file/directory existence and counts. It does not open Cookies, IndexedDB, Local Storage, project instructions, or conversations.[/dim]")
 
 
 @app.command("cloud-probe")
 def cloud_probe() -> None:
-    """Probe claude.ai IndexedDB for structural project markers without printing stored values."""
     items = probe_claude_cloud_cache()
     table = Table(title="Claude Desktop cloud cache probe — counts only")
     table.add_column("Profile root")
@@ -80,29 +75,50 @@ def cloud_probe() -> None:
     table.add_column("Truncated")
     for item in items:
         table.add_row(
-            str(item.profile_root),
-            str(item.files_scanned),
-            str(item.bytes_scanned),
-            str(item.marker_counts.get("project", 0)),
-            str(item.marker_counts.get("projects_path", 0)),
-            str(item.marker_counts.get("project_id", 0)),
-            str(item.marker_counts.get("project_uuid", 0)),
-            str(item.marker_counts.get("api_organizations", 0)),
-            str(item.uuid_pattern_count),
+            str(item.profile_root), str(item.files_scanned), str(item.bytes_scanned),
+            str(item.marker_counts.get("project", 0)), str(item.marker_counts.get("projects_path", 0)),
+            str(item.marker_counts.get("project_id", 0)), str(item.marker_counts.get("project_uuid", 0)),
+            str(item.marker_counts.get("api_organizations", 0)), str(item.uuid_pattern_count),
             "YES" if item.truncated else "NO",
         )
     console.print(table)
     if any(item.has_project_markers for item in items):
-        console.print(
-            "[green]Project-related markers exist in the local claude.ai IndexedDB cache. A metadata-only local cloud-project extractor may be feasible.[/green]"
-        )
+        console.print("[green]Project-related markers exist in the local claude.ai IndexedDB cache. A metadata-only local cloud-project extractor may be feasible.[/green]")
     else:
-        console.print(
-            "[yellow]No convincing project markers were found in the bounded local cache scan. Everstate will not infer project names from this result.[/yellow]"
+        console.print("[yellow]No convincing project markers were found in the bounded local cache scan. Everstate will not infer project names from this result.[/yellow]")
+    console.print("[dim]This probe emits counts only. It does not print cached values, project names, messages, cookies, tokens, instructions, or conversation text.[/dim]")
+
+
+@app.command("cloud-layout")
+def cloud_layout() -> None:
+    """Measure cache encoding and UUID/metadata proximity without revealing values."""
+    items = diagnose_claude_cloud_layout()
+    table = Table(title="Claude Desktop cloud cache layout — counts only")
+    table.add_column("Profile")
+    table.add_column("Files", justify="right")
+    table.add_column("Bytes", justify="right")
+    table.add_column("UUID ASCII", justify="right")
+    table.add_column("UUID UTF16", justify="right")
+    table.add_column("project A/U", justify="right")
+    table.add_column("name A/U", justify="right")
+    table.add_column("P≤1.5K", justify="right")
+    table.add_column("P≤4K", justify="right")
+    table.add_column("P≤16K", justify="right")
+    table.add_column("P≤64K", justify="right")
+    table.add_column("name≤4K", justify="right")
+    table.add_column("Truncated")
+    for item in items:
+        table.add_row(
+            str(item.profile_root), str(item.files_scanned), str(item.bytes_scanned),
+            str(item.uuid_ascii), str(item.uuid_utf16le),
+            f"{item.project_ascii}/{item.project_utf16le}", f"{item.name_ascii}/{item.name_utf16le}",
+            str(item.uuid_with_project_1536), str(item.uuid_with_project_4096),
+            str(item.uuid_with_project_16384), str(item.uuid_with_project_65536),
+            str(item.uuid_with_name_4096), "YES" if item.truncated else "NO",
         )
-    console.print(
-        "[dim]This probe emits counts only. It does not print cached values, project names, messages, cookies, tokens, instructions, or conversation text.[/dim]"
-    )
+    console.print(table)
+    console.print("[dim]A/U = ASCII/UTF-16LE marker counts. P≤N = UUIDs with a project marker within N bytes. Values themselves are never printed.[/dim]")
+    console.print("[dim]This command reads only claude.ai IndexedDB. It does not read Cookies, Local Storage, messages, instructions, or tokens.[/dim]")
 
 
 @app.command("projects")
@@ -113,7 +129,6 @@ def projects(
     items = discover_claude_desktop_projects()
     registered = list_registered_projects(_store())
     associations = [associate_claude_desktop_project(item, registered) for item in items]
-
     if json_output:
         typer.echo(json.dumps([
             {
@@ -134,7 +149,6 @@ def projects(
             for a in associations
         ], indent=2))
         return
-
     table = Table(title="Claude Desktop local Cowork projects — source inventory")
     table.add_column("#")
     table.add_column("Desktop project")
@@ -147,7 +161,6 @@ def projects(
         style = {"VERIFIED": "green", "AMBIGUOUS": "yellow", "UNKNOWN": "red"}[association.status]
         table.add_row(str(index), item.name, item.project_id, str(len(item.folders)), f"[{style}]{association.status}[/{style}]", association.project.name if association.project else "—")
     console.print(table)
-
     if full_paths:
         console.print("[bold]Claude Desktop local Cowork folder assignments[/bold]")
         for index, association in enumerate(associations, start=1):
@@ -159,7 +172,6 @@ def projects(
             else:
                 console.print("   - [dim]No local folder exposed by Desktop metadata[/dim]")
             console.print(f"   Association: {association.status} — {association.detail}")
-
     if not items:
         console.print("[yellow]No local Claude Desktop/Cowork projects were found in spaces.json.[/yellow]")
         console.print("[cyan]This does not prove Claude Desktop has no Projects. claude.ai cloud Projects are a separate source surface.[/cyan]")
