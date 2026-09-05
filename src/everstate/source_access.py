@@ -23,6 +23,8 @@ class AccessStatus(str, Enum):
 
 @dataclass(frozen=True)
 class SourceCapabilities:
+    open_projects_ui: bool = False
+    open_exact_project: bool = False
     list_projects: bool = False
     read_project_metadata: bool = False
     read_project_instructions: bool = False
@@ -73,12 +75,6 @@ _STATUS_PRIORITY = {
 
 
 def rank_access_options(options: Iterable[AccessOption]) -> list[AccessOption]:
-    """Rank source-access paths without inventing readiness.
-
-    Method order expresses Everstate's preferred access ladder. Status is used only
-    within the same method. An unverified higher method remains visible but is not
-    treated as usable merely because it ranks earlier conceptually.
-    """
     return sorted(
         options,
         key=lambda option: (
@@ -94,11 +90,6 @@ def recommended_access_option(
     *,
     allow_sensitive_fallback: bool = False,
 ) -> AccessOption | None:
-    """Return the safest currently usable access path.
-
-    LOCAL_CACHE is deliberately approval-gated. A failed/absent authorized path must
-    never silently escalate Everstate into local application cache inspection.
-    """
     for option in rank_access_options(options):
         if not option.usable:
             continue
@@ -116,9 +107,8 @@ def claude_desktop_access_baseline(
 ) -> list[AccessOption]:
     """Current conservative Claude Desktop access inventory.
 
-    The authorized-session path is intentionally UNVERIFIED by default. Everstate may
-    only upgrade it after a live probe proves access on the user's machine. The local
-    cache path is recovery-only and approval-gated.
+    UI navigation capabilities are tracked separately from programmatic content access.
+    A successful exact-project deep link must not be promoted into list/read capability.
     """
     return [
         AccessOption(
@@ -133,7 +123,7 @@ def claude_desktop_access_baseline(
             method=AccessMethod.AUTHORIZED_SESSION,
             status=authorized_session_status,
             capabilities=authorized_capabilities or SourceCapabilities(),
-            detail="Use the user's explicitly authorized existing Claude account/session when a live probe proves the required capabilities.",
+            detail="Use the user's explicitly authorized existing Claude account/session when live probes prove each capability.",
         ),
         AccessOption(
             source_environment="claude-desktop",
