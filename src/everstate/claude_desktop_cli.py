@@ -14,6 +14,7 @@ from .claude_desktop import (
     discover_claude_desktop_projects,
     probe_claude_cloud_cache,
 )
+from .claude_desktop_authorized import probe_claude_desktop_authorized
 from .storage import LocalStore
 from .transfer_plan import list_registered_projects
 
@@ -28,6 +29,52 @@ def desktop_cli() -> None:
 
 def _store() -> LocalStore:
     return LocalStore(Path.home() / ".everstate" / "everstate.db")
+
+
+@app.command("authorized-probe")
+def authorized_probe(
+    open_projects: bool = typer.Option(
+        False,
+        "--open-projects",
+        help="Explicitly hand Claude's documented project-list fallback deep link to Claude Desktop.",
+    ),
+) -> None:
+    """Verify safe UI-level access to the user's current Claude Desktop session."""
+    item = probe_claude_desktop_authorized(open_projects=open_projects)
+    table = Table(title="Claude Desktop authorized-session probe")
+    table.add_column("Check")
+    table.add_column("Result")
+    table.add_row("Desktop profile", "YES" if item.profile_exists else "NO")
+    table.add_row("claude:// scheme handler", item.scheme_handler or "NOT FOUND")
+    table.add_row("OS opener", item.opener or "NOT FOUND")
+    table.add_row("Desktop process detected", "YES" if item.desktop_process_detected else "NO")
+    table.add_row("Can attempt UI navigation", "YES" if item.can_attempt_ui_navigation else "NO")
+    if item.navigation_attempted:
+        table.add_row("Navigation attempted", "YES")
+        table.add_row("Navigation exit code", str(item.navigation_exit_code))
+    else:
+        table.add_row("Navigation attempted", "NO")
+    console.print(table)
+
+    if item.navigation_attempted and item.navigation_exit_code == 0:
+        console.print(
+            "[green]The operating system accepted Claude's documented project deep link.[/green]"
+        )
+        console.print(
+            "[yellow]Now verify visually that Claude Desktop opened the Projects surface. This proves UI navigation only; it does not prove programmatic project listing or data access.[/yellow]"
+        )
+    elif open_projects and not item.can_attempt_ui_navigation:
+        console.print(
+            "[red]Everstate could not safely attempt Claude Desktop UI navigation because a scheme handler or OS opener is missing.[/red]"
+        )
+    else:
+        console.print(
+            "[cyan]Dry probe only. Re-run with --open-projects to explicitly test Claude Desktop Projects UI navigation.[/cyan]"
+        )
+
+    console.print(
+        "[dim]This probe does not read Cookies, tokens, IndexedDB values, Local Storage, conversations, project instructions, or project files.[/dim]"
+    )
 
 
 @app.command("diagnose")
