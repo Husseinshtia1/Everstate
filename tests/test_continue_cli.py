@@ -168,7 +168,7 @@ def test_continue_audits_failed_provider_and_offers_next_target(monkeypatch, tmp
     )
     monkeypatch.setattr(
         cli_module,
-        "probe_executable_provider",
+        "probe_provider",
         lambda key, provider, active=False: probe(key, state=ProviderState.AUTH_EXPIRED),
     )
 
