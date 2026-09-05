@@ -64,25 +64,24 @@ Inspect what the receiving AI will get:
 everstate packet /tmp/everstate-auth-test
 ```
 
+Generated runtime noise such as `.everstate/`, `__pycache__/`, `.pyc`, and `.pyo` must not appear in `MODIFIED FILES`.
+
 ## 4. Run the release preflight gate
 
-Passive preflight sends no project state to providers:
+Passive preflight sends no project state to providers, but it is **not** sufficient to authorize a controlled AI test because quota/network/model execution remain unverified:
 
 ```bash
 everstate-doctor \
-  --path /tmp/everstate-auth-test \
-  --require-ai
+  --path /tmp/everstate-auth-test
 ```
 
-For the controlled AI handoff test, continue only when the result is:
+If one or more providers look locally ready, passive mode reports:
 
 ```text
-READY_FOR_AI_TEST
+AI_HEALTH_UNVERIFIED
 ```
 
-`PORTABLE_ONLY` means Everstate state/export is healthy but no integrated AI target is currently ready. `BLOCKED` means the project/state layer itself needs attention before testing.
-
-Optional active provider health checks:
+The controlled handoff gate is the active preflight:
 
 ```bash
 everstate-doctor \
@@ -91,6 +90,14 @@ everstate-doctor \
   --require-ai
 ```
 
+Continue only when the result is:
+
+```text
+READY_FOR_AI_TEST
+```
+
+`PORTABLE_ONLY` means Everstate state/export is healthy but no integrated AI target passed readiness. `BLOCKED` means the project/state layer itself needs attention before testing.
+
 Cloud active checks may consume a small amount of provider usage. The local Ollama active check may run the configured local model. No project state is used in the health prompt.
 
 Machine-readable report:
@@ -98,16 +105,18 @@ Machine-readable report:
 ```bash
 everstate-doctor \
   --path /tmp/everstate-auth-test \
+  --active \
   --json
 ```
 
 ## 5. Inspect routing before launch
 
-Default routing:
+Use the same active health boundary for routing:
 
 ```bash
 everstate continue \
   --path /tmp/everstate-auth-test \
+  --active-health \
   --dry-run
 ```
 
@@ -117,6 +126,7 @@ Local-first routing:
 everstate continue \
   --path /tmp/everstate-auth-test \
   --mode local-first \
+  --active-health \
   --dry-run
 ```
 
@@ -124,13 +134,14 @@ Do not launch if doctor and routing disagree about the selected target.
 
 ## 6. Launch the selected provider
 
-For the first controlled receiving-side test, use a provider that doctor reports ready.
+For the first controlled receiving-side test, use a provider that active doctor reports READY.
 
 Codex cloud:
 
 ```bash
 everstate continue \
   --path /tmp/everstate-auth-test \
+  --active-health \
   --target codex
 ```
 
@@ -139,14 +150,16 @@ Gemini CLI:
 ```bash
 everstate continue \
   --path /tmp/everstate-auth-test \
+  --active-health \
   --target gemini
 ```
 
-Local Codex + Ollama, only when reported READY:
+Local Codex + Ollama, only when active doctor reports READY:
 
 ```bash
 everstate continue \
   --path /tmp/everstate-auth-test \
+  --active-health \
   --target codex-ollama
 ```
 

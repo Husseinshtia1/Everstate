@@ -90,8 +90,6 @@ def run_doctor(
         state_ready = True
         project_id = packet.project_id
         state_version = packet.state_version
-        # Serialization-only check: prove the portable escape hatch can be materialized
-        # without writing files during doctor.
         portable_ready = bool(packet.to_prompt().strip()) and bool(
             json.dumps(packet.model_dump(mode="json"), sort_keys=True)
         )
@@ -124,9 +122,18 @@ def run_doctor(
         if not portable_ready:
             reasons.append("portable continuation serialization is unavailable")
         detail = "; ".join(reasons)
-    elif integrated_ready:
+    elif integrated_ready and active:
         status = "READY_FOR_AI_TEST"
-        detail = f"Canonical state and portable fallback are ready; {len(integrated_ready)} integrated AI target(s) are ready."
+        detail = (
+            f"Canonical state and portable fallback are ready; {len(integrated_ready)} integrated AI target(s) "
+            "passed active health checks."
+        )
+    elif integrated_ready:
+        status = "AI_HEALTH_UNVERIFIED"
+        detail = (
+            f"Canonical state and portable fallback are ready; {len(integrated_ready)} integrated AI target(s) "
+            "look ready locally, but quota/network/model execution have not been actively verified. Run with --active before a controlled AI test."
+        )
     else:
         status = "PORTABLE_ONLY"
         detail = "Canonical state and portable fallback are ready, but no integrated AI target is currently ready."
@@ -151,6 +158,7 @@ def run_doctor(
 def _render(report: DoctorReport) -> None:
     status_style = {
         "READY_FOR_AI_TEST": "green",
+        "AI_HEALTH_UNVERIFIED": "cyan",
         "PORTABLE_ONLY": "yellow",
         "BLOCKED": "red",
     }[report.status]
@@ -161,6 +169,7 @@ def _render(report: DoctorReport) -> None:
         console.print(f"State version: {report.state_version}")
     console.print(f"Portable fallback: {'ready' if report.portable_ready else 'blocked'}")
     console.print(f"Routing mode: {report.routing_mode}")
+    console.print(f"Active health: {'yes' if report.active_health else 'no'}")
     console.print(f"Recommended AI target: {report.recommended_target or 'none'}")
     console.print(report.detail)
 
@@ -191,7 +200,7 @@ def doctor_command(
     require_ai: bool = typer.Option(
         False,
         "--require-ai",
-        help="Exit non-zero unless at least one integrated AI continuation target is ready.",
+        help="Exit non-zero unless at least one integrated AI target passed an active health check.",
     ),
     json_output: bool = typer.Option(False, "--json", help="Print the full preflight report as JSON."),
 ) -> None:
