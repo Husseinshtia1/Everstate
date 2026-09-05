@@ -54,16 +54,10 @@ def _extract_path_from_jsonl(path: Path, *, max_lines: int = 40, max_bytes: int 
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                candidates = [
-                    record.get("cwd"),
-                    record.get("projectPath"),
-                    record.get("project_path"),
-                ]
+                candidates = [record.get("cwd"), record.get("projectPath"), record.get("project_path")]
                 payload = record.get("payload")
                 if isinstance(payload, dict):
-                    candidates.extend(
-                        [payload.get("cwd"), payload.get("projectPath"), payload.get("project_path")]
-                    )
+                    candidates.extend([payload.get("cwd"), payload.get("projectPath"), payload.get("project_path")])
                 for value in candidates:
                     if isinstance(value, str) and value.strip():
                         return Path(value).expanduser()
@@ -78,17 +72,16 @@ def discover_codex_sessions(home: Path | None = None) -> list[DiscoveredSession]
         return []
     sessions: list[DiscoveredSession] = []
     for path in root.rglob("*.jsonl"):
-        if not path.is_file():
-            continue
-        sessions.append(
-            DiscoveredSession(
-                source=SourceEnvironment.CODEX,
-                session_id=path.stem,
-                storage_path=path,
-                working_directory=_extract_path_from_jsonl(path),
-                updated_at=_mtime(path),
+        if path.is_file():
+            sessions.append(
+                DiscoveredSession(
+                    source=SourceEnvironment.CODEX,
+                    session_id=path.stem,
+                    storage_path=path,
+                    working_directory=_extract_path_from_jsonl(path),
+                    updated_at=_mtime(path),
+                )
             )
-        )
     return sorted(sessions, key=lambda item: item.updated_at, reverse=True)
 
 
@@ -101,17 +94,16 @@ def discover_claude_code_sessions(home: Path | None = None) -> list[DiscoveredSe
         if not project_dir.is_dir():
             continue
         for path in project_dir.glob("*.jsonl"):
-            if not path.is_file():
-                continue
-            sessions.append(
-                DiscoveredSession(
-                    source=SourceEnvironment.CLAUDE_CODE,
-                    session_id=path.stem,
-                    storage_path=path,
-                    working_directory=_extract_path_from_jsonl(path),
-                    updated_at=_mtime(path),
+            if path.is_file():
+                sessions.append(
+                    DiscoveredSession(
+                        source=SourceEnvironment.CLAUDE_CODE,
+                        session_id=path.stem,
+                        storage_path=path,
+                        working_directory=_extract_path_from_jsonl(path),
+                        updated_at=_mtime(path),
+                    )
                 )
-            )
     return sorted(sessions, key=lambda item: item.updated_at, reverse=True)
 
 
@@ -157,17 +149,20 @@ def associate_session(session: DiscoveredSession, projects: Iterable[RegisteredP
     containing = [project for project in registered if _contains(project.root_path, cwd)]
     if len(containing) == 1:
         return SessionAssociation(
-            session, AssociationStatus.VERIFIED, containing[0], tuple(containing), "Working directory is uniquely inside the registered project root."
+            session,
+            AssociationStatus.VERIFIED,
+            containing[0],
+            tuple(containing),
+            "Working directory is uniquely inside the registered project root.",
         )
     if len(containing) > 1:
-        ordered = sorted(containing, key=lambda project: len(project.root_path.resolve().parts), reverse=True)
-        deepest = ordered[0]
-        if len(ordered) == 1 or len(deepest.root_path.resolve().parts) > len(ordered[1].root_path.resolve().parts):
-            return SessionAssociation(
-                session, AssociationStatus.VERIFIED, deepest, tuple(ordered), "Unique deepest registered project contains the working directory."
-            )
+        ordered = tuple(sorted(containing, key=lambda project: str(project.root_path)))
         return SessionAssociation(
-            session, AssociationStatus.AMBIGUOUS, None, tuple(ordered), "Working directory matches multiple registered projects."
+            session,
+            AssociationStatus.AMBIGUOUS,
+            None,
+            ordered,
+            "Working directory matches multiple registered projects; Everstate will not guess.",
         )
 
     return SessionAssociation(
