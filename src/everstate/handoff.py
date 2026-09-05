@@ -36,7 +36,8 @@ def prepare_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdap
 
 def launch_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdapter) -> HandoffResult:
     prepared = prepare_handoff(root, packet, target)
-    returncode = target.launch(root, prepared.command[1])
+    prompt = prepared.command[-1]
+    returncode = target.launch(root, prompt)
     return HandoffResult(
         path=prepared.path,
         command=prepared.command,
