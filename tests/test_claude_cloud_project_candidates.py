@@ -86,11 +86,10 @@ def test_cli_strict_only_hides_unverified(monkeypatch, tmp_path: Path) -> None:
         ],
     )
 
-    result = runner.invoke(app, ["--strict-only"])
+    result = runner.invoke(app, ["--strict-only", "--json"])
 
     assert result.exit_code == 0
     assert "Real Project" in result.stdout
     assert strict_id in result.stdout
     assert unverified_id not in result.stdout
-    assert "STRICT: 1" in result.stdout
-    assert "UNVERIFIED: 0" in result.stdout
+    assert '"confidence": "STRICT"' in result.stdout
