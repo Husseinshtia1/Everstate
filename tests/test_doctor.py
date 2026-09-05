@@ -41,6 +41,7 @@ def probe(
     local: bool = False,
     cloud: bool = True,
     manual: bool = False,
+    active_check: bool = False,
 ) -> ProviderProbeResult:
     return ProviderProbeResult(
         key=key,
@@ -55,10 +56,11 @@ def probe(
             cloud=cloud,
             manual=manual,
         ),
+        active_check=active_check,
     )
 
 
-def test_doctor_reports_ready_for_ai_test_when_state_and_provider_are_ready(tmp_path: Path) -> None:
+def test_doctor_passive_ready_is_not_enough_for_ai_test(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     report = run_doctor(
         tmp_path,
@@ -69,11 +71,28 @@ def test_doctor_reports_ready_for_ai_test_when_state_and_provider_are_ready(tmp_
         ],
     )
 
-    assert report.status == "READY_FOR_AI_TEST"
-    assert report.state_ready is True
-    assert report.portable_ready is True
+    assert report.status == "AI_HEALTH_UNVERIFIED"
+    assert report.ai_test_ready is False
     assert report.integrated_ready_targets == ("codex",)
     assert report.recommended_target == "codex"
+
+
+def test_doctor_reports_ready_for_ai_test_only_after_active_health(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    report = run_doctor(
+        tmp_path,
+        active=True,
+        service=FakeService(),
+        probes=[
+            probe("codex", active_check=True),
+            probe("manual", state=ProviderState.ALWAYS_READY, cloud=False, manual=True),
+        ],
+    )
+
+    assert report.status == "READY_FOR_AI_TEST"
+    assert report.ai_test_ready is True
+    assert report.state_ready is True
+    assert report.portable_ready is True
 
 
 def test_doctor_distinguishes_portable_only_from_blocked(tmp_path: Path) -> None:
@@ -95,12 +114,49 @@ def test_doctor_distinguishes_portable_only_from_blocked(tmp_path: Path) -> None
 def test_doctor_blocks_non_git_path_even_if_provider_is_ready(tmp_path: Path) -> None:
     report = run_doctor(
         tmp_path,
+        active=True,
         service=FakeService(),
-        probes=[probe("codex")],
+        probes=[probe("codex", active_check=True)],
     )
 
     assert report.status == "BLOCKED"
     assert report.git_project is False
+
+
+def test_doctor_cli_require_ai_rejects_passive_ready(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(doctor_module, "_service", lambda: FakeService())
+    monkeypatch.setattr(
+        doctor_module,
+        "probe_all_providers",
+        lambda active=False: [
+            probe("codex", active_check=active),
+            probe("manual", state=ProviderState.ALWAYS_READY, cloud=False, manual=True),
+        ],
+    )
+
+    result = runner.invoke(app, ["--path", str(tmp_path), "--require-ai"])
+
+    assert result.exit_code == 2
+    assert "AI_HEALTH_UNVERIFIED" in result.stdout
+
+
+def test_doctor_cli_require_ai_accepts_active_ready(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(doctor_module, "_service", lambda: FakeService())
+    monkeypatch.setattr(
+        doctor_module,
+        "probe_all_providers",
+        lambda active=False: [
+            probe("codex", active_check=active),
+            probe("manual", state=ProviderState.ALWAYS_READY, cloud=False, manual=True),
+        ],
+    )
+
+    result = runner.invoke(app, ["--path", str(tmp_path), "--active", "--require-ai"])
+
+    assert result.exit_code == 0
+    assert "READY_FOR_AI_TEST" in result.stdout
 
 
 def test_doctor_cli_require_ai_exits_nonzero_for_portable_only(monkeypatch, tmp_path: Path) -> None:
@@ -110,12 +166,12 @@ def test_doctor_cli_require_ai_exits_nonzero_for_portable_only(monkeypatch, tmp_
         doctor_module,
         "probe_all_providers",
         lambda active=False: [
-            probe("codex", state=ProviderState.AUTH_EXPIRED),
+            probe("codex", state=ProviderState.AUTH_EXPIRED, active_check=active),
             probe("manual", state=ProviderState.ALWAYS_READY, cloud=False, manual=True),
         ],
     )
 
-    result = runner.invoke(app, ["--path", str(tmp_path), "--require-ai"])
+    result = runner.invoke(app, ["--path", str(tmp_path), "--active", "--require-ai"])
 
     assert result.exit_code == 2
     assert "PORTABLE_ONLY" in result.stdout
@@ -127,10 +183,10 @@ def test_doctor_json_is_machine_readable(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         doctor_module,
         "probe_all_providers",
-        lambda active=False: [probe("codex")],
+        lambda active=False: [probe("codex", active_check=active)],
     )
 
-    result = runner.invoke(app, ["--path", str(tmp_path), "--json"])
+    result = runner.invoke(app, ["--path", str(tmp_path), "--active", "--json"])
 
     assert result.exit_code == 0
     assert '"status": "READY_FOR_AI_TEST"' in result.stdout
