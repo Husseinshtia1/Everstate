@@ -18,7 +18,7 @@ class HandoffResult:
 def write_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdapter) -> Path:
     directory = root.resolve() / ".everstate" / "handoffs"
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"state-v{packet.state_version}-{target.executable}.md"
+    path = directory / f"state-v{packet.state_version}-{target.handoff_name}.md"
     path.write_text(packet.to_prompt() + "\n", encoding="utf-8")
     return path
 

@@ -33,6 +33,9 @@ class ProviderAdapter:
     name: str
     executable: str
     prompt_args: tuple[str, ...] = ()
+    model_env: str | None = None
+    default_model: str | None = None
+    handoff_slug: str | None = None
 
     def resolve_executable(self) -> str | None:
         on_path = shutil.which(self.executable)
@@ -47,8 +50,22 @@ class ProviderAdapter:
     def available(self) -> bool:
         return self.resolve_executable() is not None
 
+    def selected_model(self) -> str | None:
+        if self.model_env:
+            configured = os.environ.get(self.model_env)
+            if configured:
+                return configured.strip()
+        return self.default_model
+
+    def effective_prompt_args(self) -> list[str]:
+        args = list(self.prompt_args)
+        model = self.selected_model()
+        if model is not None:
+            args.extend(["-m", model])
+        return args
+
     def interactive_command(self, prompt: str) -> list[str]:
-        return [self.resolve_executable() or self.executable, *self.prompt_args, prompt]
+        return [self.resolve_executable() or self.executable, *self.effective_prompt_args(), prompt]
 
     def launch(self, root: Path, prompt: str) -> int:
         executable = self.resolve_executable()
@@ -58,17 +75,29 @@ class ProviderAdapter:
                 f"Install or configure {self.name}, or set EVERSTATE_{self.executable.upper()}_BIN."
             )
         completed = subprocess.run(
-            [executable, *self.prompt_args, prompt],
+            [executable, *self.effective_prompt_args(), prompt],
             cwd=root.resolve(),
             check=False,
         )
         return completed.returncode
+
+    @property
+    def handoff_name(self) -> str:
+        return self.handoff_slug or self.executable
 
 
 PROVIDERS: dict[str, ProviderAdapter] = {
     "claude": ProviderAdapter(name="Claude Code", executable="claude"),
     "codex": ProviderAdapter(name="Codex", executable="codex"),
     "gemini": ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",)),
+    "codex-ollama": ProviderAdapter(
+        name="Codex + Ollama (local)",
+        executable="codex",
+        prompt_args=("--oss", "--local-provider", "ollama"),
+        model_env="EVERSTATE_OLLAMA_MODEL",
+        default_model="gpt-oss:20b",
+        handoff_slug="codex-ollama",
+    ),
 }
 
 

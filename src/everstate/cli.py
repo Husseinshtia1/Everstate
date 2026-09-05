@@ -11,7 +11,7 @@ from rich.table import Table
 from .acceptance import ContinuityScenario, evaluate_scenario, seed_scenario
 from .handoff import launch_handoff, prepare_handoff
 from .portable import copy_packet, export_packet
-from .provider_readiness import ProviderState, probe_all_providers, probe_executable_provider
+from .provider_readiness import ProviderState, probe_all_providers, probe_provider
 from .providers import get_provider
 from .routing import RoutingMode, rank_providers
 from .routing_attempts import (
@@ -177,7 +177,7 @@ def providers_command(
     if active:
         console.print("[dim]Active health checks were requested. They use fixed health prompts and send no project state or source.[/dim]")
     else:
-        console.print("[dim]Passive mode checks installation and local auth state. Use --active to test provider network/quota health.[/dim]")
+        console.print("[dim]Passive mode checks local readiness without sending project state. Use --active for network/quota/model execution checks.[/dim]")
 
 
 @app.command("export")
@@ -215,11 +215,11 @@ def copy_continuation(
 def continue_work(
     path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
     mode: RoutingMode = typer.Option(RoutingMode.AUTO, "--mode", case_sensitive=False),
-    target: str | None = typer.Option(None, "--target", help="Explicit ready target key, such as codex or claude."),
+    target: str | None = typer.Option(None, "--target", help="Explicit ready target key, such as codex, gemini, or codex-ollama."),
     active_health: bool = typer.Option(
         False,
         "--active-health",
-        help="Actively test provider network/quota health before ranking; may consume small provider usage.",
+        help="Actively test provider health before ranking; cloud checks may consume small provider usage.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show routing decision without launching a provider."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Launch the first selected target without confirmation."),
@@ -316,7 +316,7 @@ def continue_work(
                 console.print(f"[dim]Routing audit: {history_path}[/dim]")
                 return
 
-            post_probe = probe_executable_provider(selected.probe.key, provider, active=False)
+            post_probe = probe_provider(selected.probe.key, provider, active=False)
             failure_class = classify_launch_outcome(returncode, post_probe)
             _audit_attempt(
                 path=path,
@@ -455,7 +455,7 @@ def packet(
 
 @app.command("switch")
 def switch_provider(
-    target: str = typer.Argument(..., help="Target AI provider: claude or codex."),
+    target: str = typer.Argument(..., help="Target AI provider key."),
     path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
     dry_run: bool = typer.Option(False, "--dry-run", help="Prepare the handoff without launching the target AI."),
 ) -> None:
