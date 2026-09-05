@@ -36,6 +36,19 @@ def test_wizard_asks_source_project_and_destination(monkeypatch, tmp_path: Path)
     assert "Planning only" in result.stdout
 
 
+def test_projects_subcommand_bypasses_interactive_wizard(monkeypatch, tmp_path: Path) -> None:
+    store = _store_with_projects(tmp_path)
+    monkeypatch.setattr(transfer_cli, "_store", lambda: store)
+
+    result = runner.invoke(app, ["projects"])
+
+    assert result.exit_code == 0
+    assert "Everstate registered projects" in result.stdout
+    assert "Project 1" in result.stdout
+    assert "Where are you continuing from?" not in result.stdout
+    assert "Source number" not in result.stdout
+
+
 def test_non_interactive_mode_never_guesses_missing_source(monkeypatch, tmp_path: Path) -> None:
     store = _store_with_projects(tmp_path)
     monkeypatch.setattr(transfer_cli, "_store", lambda: store)
