@@ -23,6 +23,7 @@ def _print_candidates(items: list[ProjectCandidate]) -> None:
     table.add_column("#")
     table.add_column("Project")
     table.add_column("Root")
+    table.add_column("Kind")
     table.add_column("Sessions", justify="right")
     table.add_column("Sources")
     table.add_column("Status")
@@ -31,6 +32,7 @@ def _print_candidates(items: list[ProjectCandidate]) -> None:
             str(index),
             item.suggested_name,
             str(item.root_path),
+            item.kind.value,
             str(item.session_count),
             ", ".join(source.value for source in item.sources),
             "REGISTERED" if item.already_registered else "NEW",
@@ -54,24 +56,24 @@ def list_projects() -> None:
 def discover(
     source: list[SourceEnvironment] = typer.Option([], "--from", help="Source(s) to inspect. Repeat to combine. Defaults to Codex + Claude Code."),
 ) -> None:
-    """Show unique Git projects inferred from source-session working directories."""
+    """Show canonical Git/workspace projects inferred from source-session working directories."""
     sources = tuple(source) if source else (SourceEnvironment.CODEX, SourceEnvironment.CLAUDE_CODE)
     items = discover_project_candidates(_store(), sources=sources)
     _print_candidates(items)
-    console.print("[dim]Only existing local Git repositories are proposed. Nothing is registered automatically.[/dim]")
+    console.print("[dim]Git roots are preferred when available; otherwise exact existing working directories are proposed as workspace projects. Nothing is registered automatically.[/dim]")
 
 
 @app.command("onboard")
 def onboard(
     source: list[SourceEnvironment] = typer.Option([], "--from", help="Source(s) to inspect. Repeat to combine. Defaults to Codex + Claude Code."),
 ) -> None:
-    """Interactively register one, selected, or all discovered Git projects."""
+    """Interactively register one, selected, or all discovered projects."""
     sources = tuple(source) if source else (SourceEnvironment.CODEX, SourceEnvironment.CLAUDE_CODE)
     items = discover_project_candidates(_store(), sources=sources)
     new_items = [item for item in items if not item.already_registered]
     _print_candidates(items)
     if not new_items:
-        console.print("[green]No unregistered Git projects were found.[/green]")
+        console.print("[green]No unregistered projects were found.[/green]")
         return
 
     console.print("[bold]What do you want to register?[/bold]")
@@ -114,7 +116,10 @@ def onboard(
 
     console.print("[bold]Registration review[/bold]")
     for item in selected:
-        console.print(f"- {item.suggested_name}: {item.root_path} ({item.session_count} discovered sessions)")
+        console.print(
+            f"- {item.suggested_name}: {item.root_path} "
+            f"[{item.kind.value}] ({item.session_count} discovered sessions)"
+        )
     if not typer.confirm("Register these canonical projects in Everstate?", default=False):
         raise typer.Abort()
 

@@ -22,9 +22,28 @@ class EverstateService:
         root = root.resolve()
         project_id = stable_project_id(root)
         self.store.upsert_project(project_id, root.name, root)
-        event = snapshot_event(project_id, root)
+
+        try:
+            event = snapshot_event(project_id, root)
+        except RuntimeError:
+            # Everstate projects do not require Git. A non-Git workspace starts
+            # with a canonical state but without Git-derived file evidence.
+            if self.store.latest_state(project_id) is None:
+                event = Event(
+                    project_id=project_id,
+                    event_type="workspace_initialized",
+                    source_type="local_workspace",
+                    source_locator=str(root),
+                    actor="local_runtime",
+                    payload={"root": str(root), "git_backed": False},
+                )
+                self.store.append_event(event)
+                self.store.save_state(ProjectState(project_id=project_id, version=1))
+            return project_id
+
         self.store.append_event(event)
-        self._materialize_git_state(project_id, event.payload)
+        if self.store.latest_state(project_id) is None:
+            self._materialize_git_state(project_id, event.payload)
         return project_id
 
     def _ensure_project(self, root: Path) -> tuple[Path, str]:
@@ -38,7 +57,16 @@ class EverstateService:
 
     def refresh_project(self, root: Path) -> ProjectState:
         root, project_id = self._ensure_project(root)
-        event = snapshot_event(project_id, root)
+        try:
+            event = snapshot_event(project_id, root)
+        except RuntimeError:
+            latest = self.store.latest_state(project_id)
+            if latest is not None:
+                return latest
+            state = ProjectState(project_id=project_id, version=1)
+            self.store.save_state(state)
+            return state
+
         recent_events = self.store.list_events(project_id, limit=200)
         latest_git_event = next(
             (row for row in recent_events if row["event_type"] == "git_snapshot"),
@@ -188,7 +216,7 @@ class EverstateService:
         if state.modified_files:
             lines.extend(f"- {path}" for path in state.modified_files)
         else:
-            lines.append("- Working tree clean")
+            lines.append("- Working tree clean or file tracking unavailable")
 
         self._append_section(lines, "Active decisions:", state.decisions, "None captured yet")
         self._append_section(lines, "Active constraints:", state.active_constraints, "None captured yet")
