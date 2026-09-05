@@ -71,7 +71,11 @@ def test_claude_desktop_without_inventory_does_not_fallback_to_registry(monkeypa
 
     assert result.exit_code != 0
     assert "No local Claude Desktop/Cowork projects were found" in result.output
-    assert "will not substitute Claude Code sessions or registered projects" in result.output
+    # Behavioral contract: the registered canonical project must never be shown
+    # as a substitute Desktop source item when Desktop inventory is empty.
+    assert "Everstate registered projects" not in result.output
+    assert "Project 1" not in result.output
+    assert "Where do you want to continue?" not in result.output
 
 
 def test_projects_subcommand_bypasses_interactive_wizard(monkeypatch, tmp_path: Path) -> None:
