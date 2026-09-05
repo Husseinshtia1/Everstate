@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,6 +18,13 @@ class ProjectCandidateKind(StrEnum):
     WORKSPACE_PROJECT = "WORKSPACE_PROJECT"
 
 
+class ProjectCandidateRole(StrEnum):
+    PRIMARY_PROJECT = "PRIMARY_PROJECT"
+    EXPERIMENT_FAMILY = "EXPERIMENT_FAMILY"
+    RUN_ARTIFACT = "RUN_ARTIFACT"
+    UNKNOWN = "UNKNOWN"
+
+
 @dataclass(frozen=True)
 class ProjectCandidate:
     root_path: Path
@@ -26,6 +34,7 @@ class ProjectCandidate:
     already_registered: bool
     project_id: str
     kind: ProjectCandidateKind
+    role: ProjectCandidateRole
 
 
 @dataclass(frozen=True)
@@ -37,6 +46,7 @@ class WorkspaceFamily:
     sources: tuple[SourceEnvironment, ...]
     already_registered: bool
     project_id: str
+    role: ProjectCandidateRole
 
 
 def _git_toplevel(path: Path) -> Path | None:
@@ -71,10 +81,41 @@ def _candidate_root(session: DiscoveredSession) -> tuple[Path, ProjectCandidateK
     if git_root is not None:
         return git_root, ProjectCandidateKind.GIT_PROJECT
 
-    # Non-Git projects are valid Everstate workspaces. Exact source working
-    # directories remain the canonical candidates; parent-family detection is
-    # a review suggestion only and never silently rewrites project identity.
     return cwd, ProjectCandidateKind.WORKSPACE_PROJECT
+
+
+def _looks_like_run_artifact(name: str) -> bool:
+    normalized = name.lower()
+    patterns = (
+        r"^agent[_-]",
+        r"^run[_-]",
+        r"^rollout[_-]",
+        r"^attempt[_-]",
+        r"^trial[_-]",
+    )
+    return any(re.search(pattern, normalized) for pattern in patterns)
+
+
+def _looks_like_experiment_family(name: str) -> bool:
+    normalized = name.lower()
+    tokens = ("acceptance", "benchmark", "evaluation", "eval", "experiment", "test-harness", "test_harness")
+    return any(token in normalized for token in tokens)
+
+
+def classify_candidate_role(root: Path, kind: ProjectCandidateKind) -> ProjectCandidateRole:
+    if kind is ProjectCandidateKind.GIT_PROJECT:
+        return ProjectCandidateRole.PRIMARY_PROJECT
+    if _looks_like_run_artifact(root.name):
+        return ProjectCandidateRole.RUN_ARTIFACT
+    return ProjectCandidateRole.UNKNOWN
+
+
+def classify_family_role(root: Path, members: tuple[ProjectCandidate, ...]) -> ProjectCandidateRole:
+    if _looks_like_experiment_family(root.name):
+        return ProjectCandidateRole.EXPERIMENT_FAMILY
+    if members and all(member.role is ProjectCandidateRole.RUN_ARTIFACT for member in members):
+        return ProjectCandidateRole.EXPERIMENT_FAMILY
+    return ProjectCandidateRole.UNKNOWN
 
 
 def discover_project_candidates(
@@ -116,6 +157,7 @@ def discover_project_candidates(
                 already_registered=root in registered,
                 project_id=(registered[root].project_id if root in registered else stable_project_id(root)),
                 kind=kind,
+                role=classify_candidate_role(root, kind),
             )
         )
     return sorted(candidates, key=lambda item: (-item.session_count, str(item.root_path)))
@@ -146,8 +188,6 @@ def _deepest_safe_common_parent(paths: list[Path]) -> Path | None:
     if _unsafe_family_root(common):
         return None
     if common in {path.resolve() for path in paths}:
-        # A member that is itself the ancestor is already a better explicit
-        # candidate than inventing a second family identity at the same path.
         return None
     return common
 
@@ -161,8 +201,6 @@ def discover_workspace_families(
     if len(workspace_items) < 2:
         return []
 
-    # First group by immediate parent. This catches common cases where agents
-    # launch in sibling workspaces such as <project>/agent_a, <project>/agent_b.
     by_parent: dict[Path, list[ProjectCandidate]] = {}
     for item in workspace_items:
         by_parent.setdefault(item.root_path.parent.resolve(), []).append(item)
@@ -174,8 +212,6 @@ def discover_workspace_families(
             candidate_groups.append((parent, members))
             consumed.update(member.root_path for member in members)
 
-    # If sibling grouping did not capture everything, consider one conservative
-    # deeper common ancestor across the remaining workspace candidates.
     remaining = [item for item in workspace_items if item.root_path not in consumed]
     common = _deepest_safe_common_parent([item.root_path for item in remaining])
     if common is not None:
@@ -192,15 +228,17 @@ def discover_workspace_families(
             continue
         seen_roots.add(root)
         source_set = {source for member in members for source in member.sources}
+        member_tuple = tuple(sorted(members, key=lambda item: str(item.root_path)))
         families.append(
             WorkspaceFamily(
                 root_path=root,
                 suggested_name=root.name,
-                members=tuple(sorted(members, key=lambda item: str(item.root_path))),
+                members=member_tuple,
                 session_count=sum(member.session_count for member in members),
                 sources=tuple(sorted(source_set, key=lambda item: item.value)),
                 already_registered=root in registered,
                 project_id=(registered[root].project_id if root in registered else stable_project_id(root)),
+                role=classify_family_role(root, member_tuple),
             )
         )
     return sorted(families, key=lambda item: (-item.session_count, str(item.root_path)))
@@ -216,3 +254,16 @@ def register_workspace_family(store: LocalStore, family: WorkspaceFamily) -> Reg
     service = EverstateService(store)
     project_id = service.init_project(family.root_path)
     return RegisteredProject(project_id=project_id, name=family.root_path.name, root_path=family.root_path)
+
+
+def register_explicit_project_path(store: LocalStore, root_path: Path, name: str | None = None) -> RegisteredProject:
+    root = root_path.expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Project root does not exist or is not a directory: {root}")
+    service = EverstateService(store)
+    project_id = service.init_project(root)
+    final_name = (name or root.name).strip()
+    if not final_name:
+        raise ValueError("Project name cannot be empty")
+    store.upsert_project(project_id, final_name, root)
+    return RegisteredProject(project_id=project_id, name=final_name, root_path=root)
