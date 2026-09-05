@@ -37,7 +37,6 @@ def test_local_model_can_be_selected_without_changing_cloud_codex(monkeypatch) -
     local = get_provider("codex-ollama")
     cloud = get_provider("codex")
 
-    assert local.interactive_command("continue")[-3:] == ["qwen3-coder:latest", "continue"][-2:] if False else local.interactive_command("continue")[-3:]
     assert local.interactive_command("continue") == [
         "codex",
         "--oss",
@@ -145,13 +144,13 @@ def test_prepare_gemini_handoff_preserves_prompt_after_interactive_flag(tmp_path
     assert "Inspect the current working tree" in result.command[-1]
 
 
-def test_prepare_local_handoff_uses_oss_provider_and_installed_model(tmp_path: Path, monkeypatch) -> None:
+def test_prepare_local_handoff_uses_distinct_identity_and_installed_model(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("everstate.providers.ProviderAdapter.resolve_executable", lambda self: self.executable)
     monkeypatch.setenv("EVERSTATE_OLLAMA_MODEL", "qwen3-coder:latest")
 
     result = prepare_handoff(tmp_path, _packet(), get_provider("codex-ollama"))
 
-    assert result.path == tmp_path / ".everstate" / "handoffs" / "state-v12-codex.md"
+    assert result.path == tmp_path / ".everstate" / "handoffs" / "state-v12-codex-ollama.md"
     assert result.command[:6] == [
         "codex",
         "--oss",
