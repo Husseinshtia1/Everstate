@@ -32,6 +32,7 @@ everstate-sources = "everstate.sources_cli:app"
 everstate-try = "everstate.try_cli:app"
 everstate-projects = "everstate.projects_cli:app"
 everstate-desktop = "everstate.claude_desktop_cli:app"
+everstate-cloud-projects = "everstate.claude_cloud_cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/everstate"]
