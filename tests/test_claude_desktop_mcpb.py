@@ -4,7 +4,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from scripts.build_everstate_mcpb import build
+from everstate.mcpb_build import build_mcpb
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +40,7 @@ def test_proxy_is_fail_closed_and_never_invokes_a_shell() -> None:
 
 
 def test_packager_produces_minimal_valid_mcpb_zip(tmp_path: Path) -> None:
-    output = build(tmp_path / "everstate-capture.mcpb")
+    output = build_mcpb(tmp_path / "everstate-capture.mcpb", EXTENSION)
     assert output.is_file()
     with zipfile.ZipFile(output, "r") as archive:
         assert set(archive.namelist()) == {"manifest.json", "server/proxy.js"}
