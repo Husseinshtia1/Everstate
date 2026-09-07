@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "everstate-capture",
   "display_name": "Everstate Capture",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Capture verified project state into Everstate while you work so continuity survives AI limits and outages.",
   "long_description": "Everstate Capture is a local MCP desktop extension that forwards structured project-state updates to your locally installed Everstate runtime. It does not store raw full conversation transcripts by default. Configure one explicit project root per extension instance to enforce project isolation. The Everstate home can also be redirected for isolated acceptance testing.",
   "author": {
@@ -17,12 +17,12 @@
     "entry_point": "server/proxy.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/proxy.js"],
-      "env": {
-        "EVERSTATE_MCP_COMMAND": "${user_config.everstate_mcp_command}",
-        "EVERSTATE_ALLOWED_ROOT": "${user_config.project_root}",
-        "EVERSTATE_HOME": "${user_config.everstate_home}"
-      }
+      "args": [
+        "${__dirname}/server/proxy.js",
+        "${user_config.everstate_mcp_command}",
+        "${user_config.project_root}",
+        "${user_config.everstate_home}"
+      ]
     }
   },
   "user_config": {
