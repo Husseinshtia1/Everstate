@@ -5,13 +5,116 @@ from pathlib import Path
 
 from everstate.capture import CaptureEngine
 from everstate.emergency_failover import prepare_emergency_failover
-from everstate.mcp_server import handle_request
+from everstate.mcp_server import LATEST_PROTOCOL, handle_request
 from everstate.service import EverstateService
 from everstate.storage import LocalStore
 
 
 def _engine(tmp_path: Path) -> CaptureEngine:
     return CaptureEngine(EverstateService(LocalStore(tmp_path / "everstate.db")))
+
+
+def _modern_meta() -> dict:
+    return {
+        "io.modelcontextprotocol/protocolVersion": LATEST_PROTOCOL,
+        "io.modelcontextprotocol/clientInfo": {"name": "claude-probe", "version": "1"},
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+
+def test_mcp_2026_server_discover_is_conformant() -> None:
+    response = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "discover-1",
+            "method": "server/discover",
+            "params": {"_meta": _modern_meta()},
+        }
+    )
+    assert response is not None
+    result = response["result"]
+    assert result["resultType"] == "complete"
+    assert LATEST_PROTOCOL in result["supportedVersions"]
+    assert result["capabilities"] == {"tools": {}}
+    assert result["cacheScope"] == "private"
+    assert result["ttlMs"] == 60000
+    assert result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == "everstate-capture"
+
+
+def test_mcp_2026_tools_list_and_call_have_modern_result_shape(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    engine = _engine(tmp_path)
+
+    listed = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {"_meta": _modern_meta()},
+        },
+        engine,
+    )
+    assert listed is not None
+    assert listed["result"]["resultType"] == "complete"
+    assert listed["result"]["cacheScope"] == "private"
+    assert {tool["name"] for tool in listed["result"]["tools"]} == {
+        "everstate_capture",
+        "everstate_status",
+    }
+
+    called = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "_meta": _modern_meta(),
+                "name": "everstate_capture",
+                "arguments": {
+                    "project_root": str(root),
+                    "kind": "task",
+                    "value": "MODERN_CAPTURE",
+                    "source_provider": "claude-desktop",
+                },
+            },
+        },
+        engine,
+    )
+    assert called is not None
+    assert called["result"]["resultType"] == "complete"
+    assert called["result"]["isError"] is False
+    assert engine.service.status(root).current_task == "MODERN_CAPTURE"
+
+
+def test_mcp_legacy_initialize_and_tools_list_remain_compatible() -> None:
+    initialized = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "legacy", "version": "1"},
+            },
+        }
+    )
+    assert initialized is not None
+    assert initialized["result"]["protocolVersion"] == "2025-11-25"
+
+    notification = handle_request(
+        {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+    )
+    assert notification is None
+
+    listed = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    assert listed is not None
+    assert "resultType" not in listed["result"]
+    assert {tool["name"] for tool in listed["result"]["tools"]} == {
+        "everstate_capture",
+        "everstate_status",
+    }
 
 
 def test_multi_project_capture_is_isolated(tmp_path: Path) -> None:

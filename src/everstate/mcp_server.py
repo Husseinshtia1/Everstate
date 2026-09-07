@@ -14,6 +14,7 @@ from .storage import LocalStore
 SERVER_NAME = "everstate-capture"
 SERVER_VERSION = "0.1.0"
 LATEST_PROTOCOL = "2026-07-28"
+LEGACY_PROTOCOL = "2025-11-25"
 
 
 def _runtime_home() -> Path:
@@ -45,6 +46,25 @@ def _authorized_root(root: Path) -> Path:
     return resolved
 
 
+def _request_protocol(message: dict[str, Any]) -> str | None:
+    params = message.get("params") or {}
+    meta = params.get("_meta") or {}
+    return meta.get("io.modelcontextprotocol/protocolVersion")
+
+
+def _is_modern(message: dict[str, Any]) -> bool:
+    return _request_protocol(message) == LATEST_PROTOCOL or message.get("method") == "server/discover"
+
+
+def _server_meta() -> dict[str, Any]:
+    return {
+        "io.modelcontextprotocol/serverInfo": {
+            "name": SERVER_NAME,
+            "version": SERVER_VERSION,
+        }
+    }
+
+
 def _tool_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -63,39 +83,53 @@ def _tool_schema() -> dict[str, Any]:
     }
 
 
-def _tools_list() -> dict[str, Any]:
-    return {
-        "tools": [
-            {
-                "name": "everstate_capture",
-                "description": (
-                    "Persist one minimal structured project-state fact in Everstate. "
-                    "Use during work so continuation does not depend on the current AI remaining available. "
-                    "Do not send raw full conversation transcripts or secrets."
-                ),
-                "inputSchema": _tool_schema(),
+def _tool_catalog() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "everstate_capture",
+            "description": (
+                "Persist one minimal structured project-state fact in Everstate. "
+                "Use during work so continuation does not depend on the current AI remaining available. "
+                "Do not send raw full conversation transcripts or secrets."
+            ),
+            "inputSchema": _tool_schema(),
+        },
+        {
+            "name": "everstate_status",
+            "description": "Read the canonical Everstate state for one explicitly selected project directory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"project_root": {"type": "string"}},
+                "required": ["project_root"],
+                "additionalProperties": False,
             },
-            {
-                "name": "everstate_status",
-                "description": "Read the canonical Everstate state for one explicitly selected project directory.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {"project_root": {"type": "string"}},
-                    "required": ["project_root"],
-                    "additionalProperties": False,
-                },
-            },
-        ],
-        "ttlMs": 60000,
-        "cacheScope": "server",
-    }
+        },
+    ]
 
 
-def _result_text(payload: Any, *, is_error: bool = False) -> dict[str, Any]:
-    return {
+def _tools_list(*, modern: bool) -> dict[str, Any]:
+    result: dict[str, Any] = {"tools": _tool_catalog()}
+    if modern:
+        result.update(
+            {
+                "resultType": "complete",
+                "ttlMs": 60000,
+                "cacheScope": "private",
+                "_meta": _server_meta(),
+            }
+        )
+    return result
+
+
+def _result_text(payload: Any, *, is_error: bool = False, modern: bool = False) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, sort_keys=True)}],
         "isError": is_error,
     }
+    if modern:
+        result["resultType"] = "complete"
+        result["_meta"] = _server_meta()
+    return result
 
 
 def handle_request(message: dict[str, Any], engine: CaptureEngine | None = None) -> dict[str, Any] | None:
@@ -105,10 +139,28 @@ def handle_request(message: dict[str, Any], engine: CaptureEngine | None = None)
     method = message.get("method")
     request_id = message.get("id")
     if request_id is None:
+        # Legacy notifications/initialized is intentionally accepted without output.
         return None
 
+    if method == "server/discover":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "resultType": "complete",
+                "supportedVersions": [LATEST_PROTOCOL, LEGACY_PROTOCOL],
+                "capabilities": {"tools": {}},
+                "_meta": _server_meta(),
+                "instructions": (
+                    "Everstate captures minimal structured project state locally for source-independent continuation."
+                ),
+                "ttlMs": 60000,
+                "cacheScope": "private",
+            },
+        }
+
     if method == "initialize":
-        requested = ((message.get("params") or {}).get("protocolVersion") or LATEST_PROTOCOL)
+        requested = ((message.get("params") or {}).get("protocolVersion") or LEGACY_PROTOCOL)
         return {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -119,19 +171,10 @@ def handle_request(message: dict[str, Any], engine: CaptureEngine | None = None)
             },
         }
 
-    if method == "server/discover":
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "protocolVersion": LATEST_PROTOCOL,
-                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-                "capabilities": {"tools": True},
-            },
-        }
+    modern = _is_modern(message)
 
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": request_id, "result": _tools_list()}
+        return {"jsonrpc": "2.0", "id": request_id, "result": _tools_list(modern=modern)}
 
     if method != "tools/call":
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}}
@@ -167,9 +210,13 @@ def handle_request(message: dict[str, Any], engine: CaptureEngine | None = None)
         else:
             raise ValueError(f"unknown tool: {name}")
     except (KeyError, TypeError, ValueError) as exc:
-        return {"jsonrpc": "2.0", "id": request_id, "result": _result_text({"ok": False, "error": str(exc)}, is_error=True)}
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": _result_text({"ok": False, "error": str(exc)}, is_error=True, modern=modern),
+        }
 
-    return {"jsonrpc": "2.0", "id": request_id, "result": _result_text(payload)}
+    return {"jsonrpc": "2.0", "id": request_id, "result": _result_text(payload, modern=modern)}
 
 
 def main() -> None:
