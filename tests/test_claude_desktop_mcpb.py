@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
+
+from scripts.build_everstate_mcpb import build
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,11 +29,21 @@ def test_manifest_has_required_mcpb_v03_fields_and_exact_tools() -> None:
 
 def test_proxy_is_fail_closed_and_never_invokes_a_shell() -> None:
     proxy = (EXTENSION / "server" / "proxy.js").read_text(encoding="utf-8")
-    assert 'shell: false' in proxy
-    assert 'EVERSTATE_MCP_COMMAND' in proxy
-    assert 'EVERSTATE_ALLOWED_ROOT' in proxy
-    assert 'path.isAbsolute(command)' in proxy
-    assert 'path.isAbsolute(allowedRoot)' in proxy
-    assert 'spawn(command, []' in proxy
-    assert 'exec(' not in proxy
-    assert 'execSync(' not in proxy
+    assert "shell: false" in proxy
+    assert "EVERSTATE_MCP_COMMAND" in proxy
+    assert "EVERSTATE_ALLOWED_ROOT" in proxy
+    assert "path.isAbsolute(command)" in proxy
+    assert "path.isAbsolute(allowedRoot)" in proxy
+    assert "spawn(command, []" in proxy
+    assert "exec(" not in proxy
+    assert "execSync(" not in proxy
+
+
+def test_packager_produces_minimal_valid_mcpb_zip(tmp_path: Path) -> None:
+    output = build(tmp_path / "everstate-capture.mcpb")
+    assert output.is_file()
+    with zipfile.ZipFile(output, "r") as archive:
+        assert set(archive.namelist()) == {"manifest.json", "server/proxy.js"}
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        assert manifest["manifest_version"] == "0.3"
+        assert manifest["name"] == "everstate-capture"
