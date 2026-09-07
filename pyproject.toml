@@ -25,7 +25,7 @@ dev = [
 ]
 
 [project.scripts]
-everstate = "everstate.cli:app"
+everstate = "everstate.cli_runtime:app"
 everstate-doctor = "everstate.doctor:app"
 everstate-transfer = "everstate.transfer_cli:app"
 everstate-sources = "everstate.sources_cli:app"
