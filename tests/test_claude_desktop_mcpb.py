@@ -4,6 +4,7 @@ import json
 import zipfile
 from pathlib import Path
 
+from everstate.mcp_server import _runtime_home
 from everstate.mcpb_build import build_mcpb
 
 
@@ -45,6 +46,13 @@ def test_proxy_is_fail_closed_and_never_invokes_a_shell() -> None:
     assert "spawn(command, []" in proxy
     assert "exec(" not in proxy
     assert "execSync(" not in proxy
+
+
+def test_runtime_home_can_be_isolated(tmp_path: Path, monkeypatch) -> None:
+    isolated = tmp_path / "isolated-home"
+    isolated.mkdir()
+    monkeypatch.setenv("EVERSTATE_HOME", str(isolated))
+    assert _runtime_home() == isolated.resolve()
 
 
 def test_packager_produces_minimal_valid_mcpb_zip(tmp_path: Path) -> None:
