@@ -1,0 +1,61 @@
+{
+  "manifest_version": "0.3",
+  "name": "everstate-capture",
+  "display_name": "Everstate Capture",
+  "version": "0.1.0",
+  "description": "Capture verified project state into Everstate while you work so continuity survives AI limits and outages.",
+  "long_description": "Everstate Capture is a local MCP desktop extension that forwards structured project-state updates to your locally installed Everstate runtime. It does not store raw full conversation transcripts by default. Configure one explicit project root per extension instance to enforce project isolation.",
+  "author": {
+    "name": "Everstate contributors"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Husseinshtia1/Everstate"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/proxy.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/proxy.js"],
+      "env": {
+        "EVERSTATE_MCP_COMMAND": "${user_config.everstate_mcp_command}",
+        "EVERSTATE_ALLOWED_ROOT": "${user_config.project_root}"
+      }
+    }
+  },
+  "user_config": {
+    "everstate_mcp_command": {
+      "type": "file",
+      "title": "Everstate MCP executable",
+      "description": "Select the installed everstate-mcp executable. For the development checkout this is typically ~/Everstate/.venv/bin/everstate-mcp.",
+      "required": true,
+      "default": "${HOME}/Everstate/.venv/bin/everstate-mcp"
+    },
+    "project_root": {
+      "type": "directory",
+      "title": "Project root",
+      "description": "Select exactly one project directory. The Everstate MCP server will reject capture or status calls for every other project root.",
+      "required": true
+    }
+  },
+  "tools": [
+    {
+      "name": "everstate_capture",
+      "description": "Persist one minimal structured current-state fact for the configured project. Do not send secrets or raw full transcripts."
+    },
+    {
+      "name": "everstate_status",
+      "description": "Read the canonical Everstate state for the configured project."
+    }
+  ],
+  "compatibility": {
+    "platforms": ["linux", "darwin", "win32"],
+    "runtimes": {
+      "node": ">=16.0.0"
+    }
+  },
+  "keywords": ["continuity", "memory", "project-state", "failover", "mcp"],
+  "license": "AGPL-3.0-or-later OR Commercial",
+  "privacy_policies": []
+}
