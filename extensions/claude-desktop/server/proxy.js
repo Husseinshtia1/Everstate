@@ -9,12 +9,16 @@ function fatal(message) {
   process.exit(2);
 }
 
-const command = (process.env.EVERSTATE_MCP_COMMAND || "").trim();
-const allowedRoot = (process.env.EVERSTATE_ALLOWED_ROOT || "").trim();
-const everstateHome = (process.env.EVERSTATE_HOME || "").trim();
+// Claude Desktop has had versions where manifest mcp_config.env values were
+// recorded but not propagated to the spawned server. MCPB user_config values
+// passed as argv are therefore the primary transport. Environment variables
+// remain a compatibility fallback for direct/local tests.
+const command = (process.argv[2] || process.env.EVERSTATE_MCP_COMMAND || "").trim();
+const allowedRoot = (process.argv[3] || process.env.EVERSTATE_ALLOWED_ROOT || "").trim();
+const everstateHome = (process.argv[4] || process.env.EVERSTATE_HOME || "").trim();
 
 if (!command) {
-  fatal("EVERSTATE_MCP_COMMAND is not configured.");
+  fatal("Everstate MCP executable is not configured.");
 }
 if (!path.isAbsolute(command)) {
   fatal("Everstate MCP executable must be an absolute path.");
@@ -23,7 +27,7 @@ if (!fs.existsSync(command)) {
   fatal(`Everstate MCP executable does not exist: ${command}`);
 }
 if (!allowedRoot) {
-  fatal("EVERSTATE_ALLOWED_ROOT is not configured.");
+  fatal("Project root is not configured.");
 }
 if (!path.isAbsolute(allowedRoot)) {
   fatal("Project root must be an absolute path.");
@@ -32,7 +36,7 @@ if (!fs.existsSync(allowedRoot) || !fs.statSync(allowedRoot).isDirectory()) {
   fatal(`Configured project root does not exist or is not a directory: ${allowedRoot}`);
 }
 if (!everstateHome) {
-  fatal("EVERSTATE_HOME is not configured.");
+  fatal("Everstate home is not configured.");
 }
 if (!path.isAbsolute(everstateHome)) {
   fatal("Everstate home must be an absolute path.");
