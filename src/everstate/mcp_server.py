@@ -16,8 +16,13 @@ SERVER_VERSION = "0.1.0"
 LATEST_PROTOCOL = "2026-07-28"
 
 
+def _runtime_home() -> Path:
+    configured = os.environ.get("EVERSTATE_HOME", "").strip()
+    return Path(configured).expanduser().resolve() if configured else Path.home().resolve()
+
+
 def _engine() -> CaptureEngine:
-    store = LocalStore(Path.home() / ".everstate" / "everstate.db")
+    store = LocalStore(_runtime_home() / ".everstate" / "everstate.db")
     return CaptureEngine(EverstateService(store))
 
 
@@ -100,7 +105,6 @@ def handle_request(message: dict[str, Any], engine: CaptureEngine | None = None)
     method = message.get("method")
     request_id = message.get("id")
     if request_id is None:
-        # Notifications are deliberately side-effect free in this server.
         return None
 
     if method == "initialize":
