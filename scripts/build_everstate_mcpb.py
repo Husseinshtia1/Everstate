@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT / "dist" / "everstate-capture-0.1.0.mcpb",
+        default=ROOT / "dist" / "everstate-capture-0.1.1.mcpb",
     )
     args = parser.parse_args()
     result = build_mcpb(args.output)
