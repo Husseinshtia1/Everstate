@@ -67,6 +67,58 @@ def test_mcp_capture_tool_updates_canonical_state(tmp_path: Path) -> None:
     assert engine.service.status(root).next_action == "RUN_ACCEPTANCE_GATE"
 
 
+def test_mcp_allowed_root_rejects_cross_project_capture(tmp_path: Path, monkeypatch) -> None:
+    allowed = tmp_path / "allowed"
+    other = tmp_path / "other"
+    allowed.mkdir()
+    other.mkdir()
+    engine = _engine(tmp_path)
+    monkeypatch.setenv("EVERSTATE_ALLOWED_ROOT", str(allowed))
+
+    blocked = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {
+                "name": "everstate_capture",
+                "arguments": {
+                    "project_root": str(other),
+                    "kind": "objective",
+                    "value": "MUST_NOT_BE_WRITTEN",
+                    "source_provider": "claude",
+                },
+            },
+        },
+        engine,
+    )
+    assert blocked is not None
+    assert blocked["result"]["isError"] is True
+    assert "outside the configured Everstate MCP boundary" in blocked["result"]["content"][0]["text"]
+    assert engine.service.store.get_project_by_root(other) is None
+
+    allowed_response = handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 22,
+            "method": "tools/call",
+            "params": {
+                "name": "everstate_capture",
+                "arguments": {
+                    "project_root": str(allowed),
+                    "kind": "objective",
+                    "value": "ALLOWED_STATE",
+                    "source_provider": "claude",
+                },
+            },
+        },
+        engine,
+    )
+    assert allowed_response is not None
+    assert allowed_response["result"]["isError"] is False
+    assert engine.service.status(allowed).objective == "ALLOWED_STATE"
+
+
 def test_emergency_failover_never_contacts_source_and_has_integrity_manifest(tmp_path: Path) -> None:
     root = tmp_path / "project"
     out = tmp_path / "failovers"
