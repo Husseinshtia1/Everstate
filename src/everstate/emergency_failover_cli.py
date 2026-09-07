@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import typer
@@ -14,8 +15,13 @@ app = typer.Typer(help="Prepare a source-independent Everstate emergency continu
 console = Console()
 
 
+def _runtime_home() -> Path:
+    configured = os.environ.get("EVERSTATE_HOME", "").strip()
+    return Path(configured).expanduser().resolve() if configured else Path.home().resolve()
+
+
 def _service() -> EverstateService:
-    return EverstateService(LocalStore(Path.home() / ".everstate" / "everstate.db"))
+    return EverstateService(LocalStore(_runtime_home() / ".everstate" / "everstate.db"))
 
 
 @app.command()
