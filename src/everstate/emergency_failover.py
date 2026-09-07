@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .continuation_readiness import assess_continuation_readiness
 from .service import EverstateService
 
 
@@ -55,6 +56,7 @@ def prepare_emergency_failover(
 
     packet = service.continuation_packet(root)
     state = service.status(root)
+    readiness = assess_continuation_readiness(service, root, state=state)
     base = (output_root or (Path.home() / ".everstate" / "failovers")).expanduser().resolve()
     bundle_dir = base / f"{_now_stamp()}-{packet.project_id}-{target_provider}"
     bundle_dir.mkdir(parents=True, exist_ok=False)
@@ -69,12 +71,20 @@ def prepare_emergency_failover(
         "source_status": "UNAVAILABLE",
         "source_contacted_during_failover": False,
         "target_provider": target_provider,
+        "continuation_readiness": readiness.to_dict(),
         "canonical_state": state.model_dump(mode="json"),
         "continuation_packet": packet_json,
     }
     json_bytes = (json.dumps(json_payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
     json_path = bundle_dir / "continuation.json"
     json_path.write_bytes(json_bytes)
+
+    readiness_lines = [
+        f"Continuation readiness: {readiness.status}",
+        f"Semantic zero-loss proven: {'YES' if readiness.semantic_zero_loss_proven else 'NO'}",
+    ]
+    if readiness.missing_fields:
+        readiness_lines.append("Missing minimum handoff fields: " + ", ".join(readiness.missing_fields))
 
     markdown = "\n".join(
         [
@@ -86,6 +96,7 @@ def prepare_emergency_failover(
             f"Unavailable source: {source_provider}",
             f"Destination: {target_provider}",
             "Source contacted during failover: NO",
+            *readiness_lines,
             "",
             packet.to_prompt(),
             "",
@@ -102,6 +113,8 @@ def prepare_emergency_failover(
         "source_provider": source_provider,
         "target_provider": target_provider,
         "source_contacted": False,
+        "continuation_readiness": readiness.status,
+        "semantic_zero_loss_proven": readiness.semantic_zero_loss_proven,
         "files": {
             "continuation.json": _sha256(json_bytes),
             "continuation.md": _sha256(markdown_bytes),
