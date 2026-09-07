@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,25 @@ LATEST_PROTOCOL = "2026-07-28"
 def _engine() -> CaptureEngine:
     store = LocalStore(Path.home() / ".everstate" / "everstate.db")
     return CaptureEngine(EverstateService(store))
+
+
+def _authorized_root(root: Path) -> Path:
+    """Resolve and enforce the optional extension-scoped project boundary.
+
+    EVERSTATE_ALLOWED_ROOT is deliberately exact-match, not parent/child containment.
+    A Claude Desktop extension configured for one project cannot mutate another
+    project even if a tool call supplies a different path.
+    """
+    resolved = root.expanduser().resolve()
+    allowed_raw = os.environ.get("EVERSTATE_ALLOWED_ROOT", "").strip()
+    if not allowed_raw:
+        return resolved
+    allowed = Path(allowed_raw).expanduser().resolve()
+    if resolved != allowed:
+        raise ValueError(
+            f"project root is outside the configured Everstate MCP boundary: {resolved} != {allowed}"
+        )
+    return resolved
 
 
 def _tool_schema() -> dict[str, Any]:
@@ -119,8 +139,9 @@ def handle_request(message: dict[str, Any], engine: CaptureEngine | None = None)
 
     try:
         if name == "everstate_capture":
+            root = _authorized_root(Path(str(arguments["project_root"])))
             result = engine.capture(
-                root=Path(str(arguments["project_root"])),
+                root=root,
                 kind=str(arguments["kind"]),
                 value=str(arguments["value"]),
                 source_provider=str(arguments["source_provider"]),
@@ -134,7 +155,7 @@ def handle_request(message: dict[str, Any], engine: CaptureEngine | None = None)
                 "source_provider": result.source_provider,
             }
         elif name == "everstate_status":
-            root = Path(str(arguments["project_root"])).expanduser().resolve()
+            root = _authorized_root(Path(str(arguments["project_root"])))
             if not root.is_dir():
                 raise ValueError(f"project root does not exist or is not a directory: {root}")
             state = engine.service.status(root)
