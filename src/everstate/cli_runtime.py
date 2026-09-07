@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from . import cli as _cli
+from .work_start_cli import register as register_work_start
 
 
 def runtime_home() -> Path:
@@ -20,3 +21,8 @@ def runtime_db_path() -> Path:
 # (status, mutations, export, continue, etc.) honors EVERSTATE_HOME.
 _cli._db_path = runtime_db_path
 app = _cli.app
+
+# Register capture-before-provider workflow on the runtime-aware app. This keeps
+# the main CLI implementation stable while making `everstate start` a first-class
+# command for the installed console entry point.
+register_work_start(app, _cli._service)
