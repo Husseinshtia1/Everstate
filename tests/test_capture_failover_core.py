@@ -5,6 +5,7 @@ from pathlib import Path
 
 from everstate.capture import CaptureEngine
 from everstate.emergency_failover import prepare_emergency_failover
+from everstate.emergency_failover_cli import _service as _failover_cli_service
 from everstate.mcp_server import LATEST_PROTOCOL, handle_request
 from everstate.service import EverstateService
 from everstate.storage import LocalStore
@@ -220,6 +221,16 @@ def test_mcp_allowed_root_rejects_cross_project_capture(tmp_path: Path, monkeypa
     assert allowed_response is not None
     assert allowed_response["result"]["isError"] is False
     assert engine.service.status(allowed).objective == "ALLOWED_STATE"
+
+
+def test_emergency_failover_cli_respects_everstate_home(tmp_path: Path, monkeypatch) -> None:
+    isolated_home = tmp_path / "isolated-home"
+    isolated_home.mkdir()
+    monkeypatch.setenv("EVERSTATE_HOME", str(isolated_home))
+
+    service = _failover_cli_service()
+
+    assert service.store.db_path == (isolated_home / ".everstate" / "everstate.db").resolve()
 
 
 def test_emergency_failover_never_contacts_source_and_has_integrity_manifest(tmp_path: Path) -> None:
