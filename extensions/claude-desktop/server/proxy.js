@@ -11,6 +11,7 @@ function fatal(message) {
 
 const command = (process.env.EVERSTATE_MCP_COMMAND || "").trim();
 const allowedRoot = (process.env.EVERSTATE_ALLOWED_ROOT || "").trim();
+const everstateHome = (process.env.EVERSTATE_HOME || "").trim();
 
 if (!command) {
   fatal("EVERSTATE_MCP_COMMAND is not configured.");
@@ -30,6 +31,15 @@ if (!path.isAbsolute(allowedRoot)) {
 if (!fs.existsSync(allowedRoot) || !fs.statSync(allowedRoot).isDirectory()) {
   fatal(`Configured project root does not exist or is not a directory: ${allowedRoot}`);
 }
+if (!everstateHome) {
+  fatal("EVERSTATE_HOME is not configured.");
+}
+if (!path.isAbsolute(everstateHome)) {
+  fatal("Everstate home must be an absolute path.");
+}
+if (!fs.existsSync(everstateHome) || !fs.statSync(everstateHome).isDirectory()) {
+  fatal(`Configured Everstate home does not exist or is not a directory: ${everstateHome}`);
+}
 
 // Never invoke a shell. The selected executable is launched directly so project
 // names, spaces, or metacharacters cannot become shell syntax.
@@ -38,6 +48,7 @@ const child = spawn(command, [], {
   env: {
     ...process.env,
     EVERSTATE_ALLOWED_ROOT: allowedRoot,
+    EVERSTATE_HOME: everstateHome,
   },
   shell: false,
 });

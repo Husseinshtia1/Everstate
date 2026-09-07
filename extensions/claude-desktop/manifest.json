@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "everstate-capture",
   "display_name": "Everstate Capture",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Capture verified project state into Everstate while you work so continuity survives AI limits and outages.",
-  "long_description": "Everstate Capture is a local MCP desktop extension that forwards structured project-state updates to your locally installed Everstate runtime. It does not store raw full conversation transcripts by default. Configure one explicit project root per extension instance to enforce project isolation.",
+  "long_description": "Everstate Capture is a local MCP desktop extension that forwards structured project-state updates to your locally installed Everstate runtime. It does not store raw full conversation transcripts by default. Configure one explicit project root per extension instance to enforce project isolation. The Everstate home can also be redirected for isolated acceptance testing.",
   "author": {
     "name": "Everstate contributors"
   },
@@ -20,7 +20,8 @@
       "args": ["${__dirname}/server/proxy.js"],
       "env": {
         "EVERSTATE_MCP_COMMAND": "${user_config.everstate_mcp_command}",
-        "EVERSTATE_ALLOWED_ROOT": "${user_config.project_root}"
+        "EVERSTATE_ALLOWED_ROOT": "${user_config.project_root}",
+        "EVERSTATE_HOME": "${user_config.everstate_home}"
       }
     }
   },
@@ -37,6 +38,13 @@
       "title": "Project root",
       "description": "Select exactly one project directory. The Everstate MCP server will reject capture or status calls for every other project root.",
       "required": true
+    },
+    "everstate_home": {
+      "type": "directory",
+      "title": "Everstate home",
+      "description": "Directory under which Everstate stores .everstate/everstate.db. Keep the default home for normal use, or choose an isolated directory for acceptance testing.",
+      "required": true,
+      "default": "${HOME}"
     }
   },
   "tools": [
