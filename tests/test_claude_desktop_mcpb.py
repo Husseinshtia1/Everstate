@@ -16,14 +16,18 @@ def test_manifest_has_required_mcpb_v03_fields_and_exact_tools() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifest_version"] == "0.3"
     assert manifest["name"] == "everstate-capture"
-    assert manifest["version"] == "0.1.1"
+    assert manifest["version"] == "0.1.2"
     assert manifest["server"]["type"] == "node"
     assert manifest["server"]["entry_point"] == "server/proxy.js"
     assert manifest["server"]["mcp_config"]["command"] == "node"
-    env = manifest["server"]["mcp_config"]["env"]
-    assert env["EVERSTATE_ALLOWED_ROOT"] == "${user_config.project_root}"
-    assert env["EVERSTATE_MCP_COMMAND"] == "${user_config.everstate_mcp_command}"
-    assert env["EVERSTATE_HOME"] == "${user_config.everstate_home}"
+    args = manifest["server"]["mcp_config"]["args"]
+    assert args == [
+        "${__dirname}/server/proxy.js",
+        "${user_config.everstate_mcp_command}",
+        "${user_config.project_root}",
+        "${user_config.everstate_home}",
+    ]
+    assert "env" not in manifest["server"]["mcp_config"]
     assert {tool["name"] for tool in manifest["tools"]} == {"everstate_capture", "everstate_status"}
     assert manifest["user_config"]["project_root"]["type"] == "directory"
     assert manifest["user_config"]["project_root"]["required"] is True
@@ -37,6 +41,9 @@ def test_manifest_has_required_mcpb_v03_fields_and_exact_tools() -> None:
 def test_proxy_is_fail_closed_and_never_invokes_a_shell() -> None:
     proxy = (EXTENSION / "server" / "proxy.js").read_text(encoding="utf-8")
     assert "shell: false" in proxy
+    assert "process.argv[2]" in proxy
+    assert "process.argv[3]" in proxy
+    assert "process.argv[4]" in proxy
     assert "EVERSTATE_MCP_COMMAND" in proxy
     assert "EVERSTATE_ALLOWED_ROOT" in proxy
     assert "EVERSTATE_HOME" in proxy
@@ -63,4 +70,4 @@ def test_packager_produces_minimal_valid_mcpb_zip(tmp_path: Path) -> None:
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert manifest["manifest_version"] == "0.3"
         assert manifest["name"] == "everstate-capture"
-        assert manifest["version"] == "0.1.1"
+        assert manifest["version"] == "0.1.2"
