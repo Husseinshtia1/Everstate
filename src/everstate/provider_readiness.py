@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .local_ollama import model_is_installed, probe_ollama_runtime
+from .omniroute_fabric import OmniRouteError, OmniRouteFabric
 from .providers import PROVIDERS, ProviderAdapter
 
 
@@ -216,6 +217,8 @@ def probe_executable_provider(
 ) -> ProviderProbeResult:
     if key == "codex-ollama":
         return probe_codex_ollama(provider, active=active)
+    if key == "codex-omniroute":
+        return probe_codex_omniroute(provider, active=active)
 
     executable = provider.resolve_executable()
     capability = ProviderCapability(coding_agent=True, repository_access=True)
@@ -286,6 +289,101 @@ def probe_executable_provider(
             active_check=True,
         )
     return _run_active_command(key, provider.name, executable, capability, health_command)
+
+
+def probe_codex_omniroute(
+    provider: ProviderAdapter,
+    *,
+    active: bool = False,
+) -> ProviderProbeResult:
+    capability = ProviderCapability(coding_agent=True, repository_access=True)
+    executable = provider.resolve_executable()
+    if executable is None:
+        return ProviderProbeResult(
+            key="codex-omniroute",
+            name=provider.name,
+            state=ProviderState.NOT_INSTALLED,
+            detail="OmniRoute CLI is not installed or is not discoverable.",
+            executable=None,
+            capability=capability,
+            active_check=active,
+        )
+
+    codex_executable = PROVIDERS["codex"].resolve_executable()
+    if codex_executable is None:
+        return ProviderProbeResult(
+            key="codex-omniroute",
+            name=provider.name,
+            state=ProviderState.NOT_INSTALLED,
+            detail="Codex CLI is required as the repository-capable frontend for OmniRoute.",
+            executable=executable,
+            capability=capability,
+            active_check=active,
+        )
+
+    if not active:
+        return ProviderProbeResult(
+            key="codex-omniroute",
+            name=provider.name,
+            state=ProviderState.READY,
+            detail=(
+                "OmniRoute CLI and Codex CLI are installed; the gateway, model catalog, quota, and network "
+                "were not actively tested."
+            ),
+            executable=executable,
+            capability=capability,
+            active_check=False,
+        )
+
+    try:
+        targets = OmniRouteFabric().discover_targets()
+    except (OmniRouteError, ValueError) as exc:
+        return ProviderProbeResult(
+            key="codex-omniroute",
+            name=provider.name,
+            state=ProviderState.NETWORK_UNAVAILABLE,
+            detail=f"OmniRoute gateway readiness failed: {exc}",
+            executable=executable,
+            capability=capability,
+            active_check=True,
+        )
+
+    if not targets:
+        return ProviderProbeResult(
+            key="codex-omniroute",
+            name=provider.name,
+            state=ProviderState.MODEL_UNAVAILABLE,
+            detail="OmniRoute is reachable but reported no model targets.",
+            executable=executable,
+            capability=capability,
+            active_check=True,
+        )
+
+    selected_model = provider.selected_model()
+    if selected_model and selected_model not in {target.id for target in targets}:
+        return ProviderProbeResult(
+            key="codex-omniroute",
+            name=provider.name,
+            state=ProviderState.MODEL_UNAVAILABLE,
+            detail=f"Configured OmniRoute model {selected_model!r} is not present in the live model catalog.",
+            executable=executable,
+            capability=capability,
+            active_check=True,
+        )
+
+    model_detail = f" Configured model {selected_model!r} is available." if selected_model else ""
+    return ProviderProbeResult(
+        key="codex-omniroute",
+        name=provider.name,
+        state=ProviderState.READY,
+        detail=(
+            f"OmniRoute gateway is reachable with {len(targets)} model target(s); Codex CLI is installed."
+            f"{model_detail}"
+        ),
+        executable=executable,
+        capability=capability,
+        active_check=True,
+    )
 
 
 def probe_codex_ollama(
