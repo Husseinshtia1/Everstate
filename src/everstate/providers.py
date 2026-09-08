@@ -36,6 +36,8 @@ class ProviderAdapter:
     model_env: str | None = None
     default_model: str | None = None
     handoff_slug: str | None = None
+    model_flag: str = "-m"
+    prompt_separator: tuple[str, ...] = ()
 
     def resolve_executable(self) -> str | None:
         on_path = shutil.which(self.executable)
@@ -61,7 +63,8 @@ class ProviderAdapter:
         args = list(self.prompt_args)
         model = self.selected_model()
         if model is not None:
-            args.extend(["-m", model])
+            args.extend([self.model_flag, model])
+        args.extend(self.prompt_separator)
         return args
 
     def interactive_command(self, prompt: str) -> list[str]:
@@ -97,6 +100,15 @@ PROVIDERS: dict[str, ProviderAdapter] = {
         model_env="EVERSTATE_OLLAMA_MODEL",
         default_model="gpt-oss:20b",
         handoff_slug="codex-ollama",
+    ),
+    "codex-omniroute": ProviderAdapter(
+        name="Codex via OmniRoute",
+        executable="omniroute",
+        prompt_args=("run", "codex"),
+        model_env="EVERSTATE_OMNIROUTE_MODEL",
+        model_flag="--model",
+        prompt_separator=("--",),
+        handoff_slug="codex-omniroute",
     ),
 }
 
