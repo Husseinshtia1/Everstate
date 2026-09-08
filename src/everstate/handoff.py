@@ -15,23 +15,26 @@ class HandoffResult:
     returncode: int | None = None
 
 
-def write_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdapter) -> Path:
-    directory = root.resolve() / ".everstate" / "handoffs"
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"state-v{packet.state_version}-{target.handoff_name}.md"
-    path.write_text(packet.to_prompt() + "\n", encoding="utf-8")
-    return path
-
-
-def prepare_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdapter) -> HandoffResult:
-    path = write_handoff(root, packet, target)
-    prompt = (
+def _handoff_prompt(packet: ContinuationPacket) -> str:
+    return (
         "Continue this existing project from the Everstate continuation packet below. "
         "Inspect the current working tree before modifying files. If repository evidence conflicts "
         "with the packet, surface the conflict instead of silently guessing.\n\n"
         + packet.to_prompt()
     )
-    return HandoffResult(path=path, command=target.interactive_command(prompt), launched=False)
+
+
+def write_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdapter) -> Path:
+    directory = root.resolve() / ".everstate" / "handoffs"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"state-v{packet.state_version}-{target.handoff_name}.md"
+    path.write_text(_handoff_prompt(packet) + "\n", encoding="utf-8")
+    return path
+
+
+def prepare_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdapter) -> HandoffResult:
+    path = write_handoff(root, packet, target)
+    return HandoffResult(path=path, command=target.interactive_command(_handoff_prompt(packet)), launched=False)
 
 
 def launch_handoff(root: Path, packet: ContinuationPacket, target: ProviderAdapter) -> HandoffResult:

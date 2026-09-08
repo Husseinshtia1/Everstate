@@ -132,6 +132,8 @@ def test_prepare_handoff_writes_local_version_pinned_packet(tmp_path: Path, monk
     assert "Do not change database schema" in text
     assert result.command[0] == "codex"
     assert "Inspect the current working tree" in result.command[-1]
+    assert text == result.command[-1] + "\n"
+    assert "surface the conflict instead of silently guessing" in text
 
 
 def test_prepare_gemini_handoff_preserves_prompt_after_interactive_flag(tmp_path: Path, monkeypatch) -> None:
@@ -142,6 +144,7 @@ def test_prepare_gemini_handoff_preserves_prompt_after_interactive_flag(tmp_path
     assert result.command[:2] == ["gemini", "-i"]
     assert "EVERSTATE CONTINUATION PACKET" in result.command[-1]
     assert "Inspect the current working tree" in result.command[-1]
+    assert result.path.read_text(encoding="utf-8") == result.command[-1] + "\n"
 
 
 def test_prepare_local_handoff_uses_distinct_identity_and_installed_model(tmp_path: Path, monkeypatch) -> None:
@@ -160,3 +163,4 @@ def test_prepare_local_handoff_uses_distinct_identity_and_installed_model(tmp_pa
         "qwen3-coder:latest",
     ]
     assert "EVERSTATE CONTINUATION PACKET" in result.command[-1]
+    assert result.path.read_text(encoding="utf-8") == result.command[-1] + "\n"
