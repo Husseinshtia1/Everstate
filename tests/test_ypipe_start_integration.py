@@ -25,7 +25,7 @@ def test_write_ypipe_handoff_contains_versioned_canonical_envelope(tmp_path: Pat
     root.mkdir()
     service = _service(tmp_path)
     service.set_objective(root, "LOCAL_CONTINUITY")
-    service.set_current_task(root, "VERIFY_LOCAL_PATH")
+    service.set_task(root, "VERIFY_LOCAL_PATH")
     service.set_next_action(root, "RUN_YPIPE")
     packet = service.continuation_packet(root)
 
