@@ -4,7 +4,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlparse
 
@@ -18,7 +18,7 @@ class OmniRouteError(RuntimeError):
 @dataclass(frozen=True)
 class OmniRouteConfig:
     base_url: str = "http://127.0.0.1:20128/v1"
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     timeout: float = 3.0
 
     @classmethod
