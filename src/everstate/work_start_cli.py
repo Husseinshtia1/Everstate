@@ -20,7 +20,11 @@ def register(app: typer.Typer, service_factory) -> None:
     def start_work(
         task: str = typer.Argument(..., help="The task to persist before opening the target AI."),
         path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
-        target: str = typer.Option(..., "--target", help="Integrated target: claude, codex, gemini, or codex-ollama."),
+        target: str = typer.Option(
+            ...,
+            "--target",
+            help="Integrated target: claude, codex, gemini, codex-ollama, or codex-omniroute.",
+        ),
         objective: str | None = typer.Option(None, "--objective", help="Optional current project objective to persist first."),
         next_action: str | None = typer.Option(None, "--next-action", help="Optional explicit next action; otherwise derived from task + target."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Persist the checkpoint and prepare a handoff without launching the AI."),
