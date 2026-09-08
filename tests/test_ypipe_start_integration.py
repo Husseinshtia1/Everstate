@@ -95,6 +95,7 @@ def test_start_ypipe_executes_only_after_checkpoint_is_persisted(tmp_path: Path,
         observed["task_at_execution"] = state.current_task
         observed["next_at_execution"] = state.next_action
         observed["packet_version"] = packet.state_version
+        observed["verified_identity"] = True
         return YpipeContinuationResult(
             mode="inference",
             target="local/model",
@@ -129,4 +130,5 @@ def test_start_ypipe_executes_only_after_checkpoint_is_persisted(tmp_path: Path,
     assert observed["task_at_execution"] == "EXECUTE_LOCAL_TASK"
     assert observed["next_at_execution"] == "EXECUTE_LOCAL_NEXT"
     assert observed["packet_version"] == service.status(root).version
-    assert "identity verified: True" in result.output
+    assert observed["verified_identity"] is True
+    assert "Canonical Everstate state was not mutated" in result.output
