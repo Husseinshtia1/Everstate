@@ -26,7 +26,7 @@ def test_prepare_handoff_routes_verified_packet_through_omniroute_codex(monkeypa
     result = prepare_handoff(tmp_path, packet, get_provider("codex-omniroute"))
 
     assert result.path.name == "state-v7-codex-omniroute.md"
-    assert result.command[:7] == [
+    assert result.command[:6] == [
         "/tmp/omniroute",
         "run",
         "codex",
