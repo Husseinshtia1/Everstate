@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from .continuity import ContinuationPacket
 from .ypipe_fabric import YpipeError, YpipeFabric
@@ -38,6 +39,17 @@ def continuation_envelope(packet: ContinuationPacket) -> dict:
             "surface_conflicts_instead_of_guessing": True,
         },
     }
+
+
+def write_ypipe_handoff(root: Path, packet: ContinuationPacket) -> Path:
+    directory = root.resolve() / ".everstate" / "handoffs"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"state-v{packet.state_version}-ypipe.json"
+    path.write_text(
+        json.dumps(continuation_envelope(packet), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _identity_matches(response: dict, packet: ContinuationPacket) -> bool:

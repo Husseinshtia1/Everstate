@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -11,6 +12,8 @@ from .handoff import launch_handoff, prepare_handoff
 from .providers import get_provider
 from .service import EverstateService
 from .work_start import checkpoint_before_provider
+from .ypipe_continuation import execute_ypipe_continuation, write_ypipe_handoff
+from .ypipe_fabric import YpipeConfig, YpipeError, YpipeFabric
 
 console = Console()
 
@@ -23,13 +26,13 @@ def register(app: typer.Typer, service_factory) -> None:
         target: str = typer.Option(
             ...,
             "--target",
-            help="Integrated target: claude, codex, gemini, codex-ollama, or codex-omniroute.",
+            help="Integrated target: claude, codex, gemini, codex-ollama, codex-omniroute, or ypipe.",
         ),
         objective: str | None = typer.Option(None, "--objective", help="Optional current project objective to persist first."),
         next_action: str | None = typer.Option(None, "--next-action", help="Optional explicit next action; otherwise derived from task + target."),
-        dry_run: bool = typer.Option(False, "--dry-run", help="Persist the checkpoint and prepare a handoff without launching the AI."),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Persist the checkpoint and prepare a handoff without launching/contacting the AI."),
     ) -> None:
-        """Capture semantic state before any AI provider is contacted, then hand off."""
+        """Capture semantic state before any AI provider/fabric is contacted, then hand off."""
         service: EverstateService = service_factory()
 
         # Critical ordering invariant: provider-independent checkpoint first.
@@ -54,11 +57,49 @@ def register(app: typer.Typer, service_factory) -> None:
             )
         )
 
-        provider = get_provider(target)
         packet = service.continuation_packet(path)
+
+        if target == "ypipe":
+            config = YpipeConfig.from_env()
+            handoff_path = write_ypipe_handoff(path, packet)
+            if dry_run:
+                console.print("[green]Checkpoint and Ypipe handoff persisted before any Ypipe contact.[/green]")
+                console.print(f"Handoff: {handoff_path}")
+                console.print(
+                    f"Mode: {'SmartPipe' if config.smartpipe_endpoint else 'local inference'}; "
+                    f"model: {config.model or 'live-catalog default'}"
+                )
+                console.print("[dim]Dry run only; Ypipe was not contacted.[/dim]")
+                return
+
+            try:
+                fabric = YpipeFabric(config)
+                result = execute_ypipe_continuation(
+                    fabric,
+                    packet,
+                    model=config.model,
+                    smartpipe_endpoint=config.smartpipe_endpoint,
+                    verify_identity=True,
+                )
+            except (YpipeError, ValueError) as exc:
+                console.print(f"Handoff: {handoff_path}")
+                console.print(f"[red]Ypipe continuation failed:[/red] {exc}")
+                console.print("[dim]The semantic checkpoint remains persisted despite execution failure.[/dim]")
+                raise typer.Exit(code=2) from exc
+
+            console.print(f"Handoff: {handoff_path}")
+            console.print(
+                f"Ypipe continuation succeeded via {result.mode} target {result.target}; "
+                f"identity verified: {result.verified_identity}"
+            )
+            console.print_json(json.dumps(result.response))
+            console.print("[dim]Canonical Everstate state was not mutated by the Ypipe response.[/dim]")
+            return
+
+        provider = get_provider(target)
         if dry_run:
             prepared = prepare_handoff(path, packet, provider)
-            console.print(f"[green]Checkpoint persisted before provider launch.[/green]")
+            console.print("[green]Checkpoint persisted before provider launch.[/green]")
             console.print(f"Handoff: {prepared.path}")
             console.print("[dim]Dry run only; no provider process was launched.[/dim]")
             return
