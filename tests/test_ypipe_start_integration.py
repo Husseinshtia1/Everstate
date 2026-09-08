@@ -50,10 +50,11 @@ def test_start_ypipe_dry_run_persists_checkpoint_without_contacting_ypipe(tmp_pa
             raise AssertionError("dry-run must not construct/contact Ypipe fabric")
 
     monkeypatch.setattr(work_start_cli, "YpipeFabric", ForbiddenFabric)
+    # Typer promotes a single registered command to the root command in this
+    # isolated test app, so invoke the command arguments directly.
     result = runner.invoke(
         app,
         [
-            "start",
             "LOCAL_TASK",
             "--path",
             str(root),
@@ -111,7 +112,6 @@ def test_start_ypipe_executes_only_after_checkpoint_is_persisted(tmp_path: Path,
     result = runner.invoke(
         app,
         [
-            "start",
             "EXECUTE_LOCAL_TASK",
             "--path",
             str(root),
