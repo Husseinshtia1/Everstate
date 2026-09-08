@@ -24,6 +24,8 @@ class YpipeConfig:
     timeout: float = 5.0
     allow_remote: bool = False
     mcp_url: str | None = None
+    model: str | None = None
+    smartpipe_endpoint: str | None = None
 
     @classmethod
     def from_env(cls) -> "YpipeConfig":
@@ -46,6 +48,8 @@ class YpipeConfig:
             timeout=timeout,
             allow_remote=allow_remote,
             mcp_url=os.environ.get("EVERSTATE_YPIPE_MCP_URL") or None,
+            model=os.environ.get("EVERSTATE_YPIPE_MODEL") or None,
+            smartpipe_endpoint=os.environ.get("EVERSTATE_YPIPE_SMARTPIPE_ENDPOINT") or None,
         )
 
 
@@ -149,6 +153,19 @@ class YpipeFabric:
             owned_by = row.get("owned_by") if isinstance(row.get("owned_by"), str) else "ypipe-local"
             targets.append(FabricTarget(id=model_id, provider=owned_by, model=model_id))
         return tuple(targets)
+
+    def selected_model(self) -> str | None:
+        return self.config.model
+
+    def resolve_model(self) -> str:
+        targets = self.discover_targets()
+        if self.config.model:
+            if self.config.model not in {target.id for target in targets}:
+                raise YpipeError(f"Configured Ypipe model {self.config.model!r} is not in the live model catalog")
+            return self.config.model
+        if not targets:
+            raise YpipeError("Ypipe reported no local models")
+        return targets[0].id
 
     def execute(
         self,
