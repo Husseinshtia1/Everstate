@@ -2,29 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Protocol
 
 from .continuity import ContinuationPacket
-from .provider_fabric import FabricResponse, FabricTarget
+from .provider_fabric import ExecutionFabric
 from .ypipe_continuation import continuation_envelope
 
 
 class ExecutionFabricError(RuntimeError):
     """Raised when a selected execution fabric cannot preserve the Everstate contract."""
-
-
-class ExecutionFabric(Protocol):
-    name: str
-
-    def discover_targets(self) -> tuple[FabricTarget, ...]: ...
-
-    def execute(
-        self,
-        *,
-        model: str,
-        messages: list[dict],
-        timeout: float | None = None,
-    ) -> FabricResponse: ...
 
 
 @dataclass(frozen=True)
