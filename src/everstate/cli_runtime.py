@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from . import cli as _cli
+from .omniroute_check_cli import register as register_omniroute_check
 from .work_start_cli import register as register_work_start
 
 
@@ -22,7 +23,6 @@ def runtime_db_path() -> Path:
 _cli._db_path = runtime_db_path
 app = _cli.app
 
-# Register capture-before-provider workflow on the runtime-aware app. This keeps
-# the main CLI implementation stable while making `everstate start` a first-class
-# command for the installed console entry point.
+# Register additive runtime-aware workflows without changing legacy command behavior.
 register_work_start(app, _cli._service)
+register_omniroute_check(app)
