@@ -5,6 +5,7 @@ from pathlib import Path
 
 from . import cli as _cli
 from .fabric_check_cli import register as register_fabric_check
+from .fabric_continue_cli import register as register_fabric_continue
 from .fabric_route_cli import register as register_fabric_route
 from .omniroute_check_cli import register as register_omniroute_check
 from .work_start_cli import register as register_work_start
@@ -32,5 +33,6 @@ register_work_start(app, _cli._service)
 register_omniroute_check(app)
 register_ypipe_check(app)
 register_fabric_route(app, _cli._service)
+register_fabric_continue(app, _cli._service)
 register_ypipe_continue(app, _cli._service)
 register_fabric_check(app)
