@@ -119,6 +119,7 @@ def register(app: typer.Typer, service_factory) -> None:
             if dry_run:
                 console.print("[green]Checkpoint and Ypipe handoff persisted before any Ypipe contact.[/green]")
                 console.print(f"Handoff: {handoff_path}")
+                console.print("[dim]Dry run only; Ypipe was not contacted.[/dim]")
                 return
             try:
                 fabric = YpipeFabric(config)
@@ -136,6 +137,7 @@ def register(app: typer.Typer, service_factory) -> None:
             console.print(f"Handoff: {handoff_path}")
             console.print(f"Ypipe continuation succeeded via {result.mode} target {result.target}; identity verified: {result.verified_identity}")
             console.print_json(json.dumps(result.response))
+            console.print("[dim]Canonical Everstate state was not mutated by the Ypipe response.[/dim]")
             return
 
         provider = get_provider(target)
@@ -143,6 +145,7 @@ def register(app: typer.Typer, service_factory) -> None:
             prepared = prepare_handoff(path, packet, provider)
             console.print("[green]Checkpoint persisted before provider launch.[/green]")
             console.print(f"Handoff: {prepared.path}")
+            console.print("[dim]Dry run only; no provider process was launched.[/dim]")
             return
 
         try:
