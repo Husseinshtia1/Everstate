@@ -8,11 +8,20 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .fabric_routing import SovereigntyMode, choose_execution_fabric
+from .freellmapi_fabric import FreeLLMAPIFabric
 from .omniroute_fabric import OmniRouteFabric
+from .provider_fabric import FabricHealth
 from .service import EverstateService
 from .ypipe_fabric import YpipeFabric
 
 console = Console()
+
+
+def _safe_health(factory) -> FabricHealth:
+    try:
+        return factory().health()
+    except (ValueError, OSError, RuntimeError) as exc:
+        return FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
 
 
 def register(app: typer.Typer, service_factory) -> None:
@@ -22,27 +31,19 @@ def register(app: typer.Typer, service_factory) -> None:
         mode: SovereigntyMode = typer.Option(SovereigntyMode.AUTO, "--mode"),
         json_output: bool = typer.Option(False, "--json"),
     ) -> None:
-        """Choose between local Ypipe and OmniRoute using canonical constraints and live fabric health."""
+        """Choose Ypipe, FreeLLMAPI, or OmniRoute from canonical constraints and live health."""
         service: EverstateService = service_factory()
         state = service.status(path)
 
-        try:
-            ypipe_health = YpipeFabric().health()
-        except (ValueError, OSError) as exc:
-            from .provider_fabric import FabricHealth
-
-            ypipe_health = FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
-        try:
-            omniroute_health = OmniRouteFabric().health()
-        except (ValueError, OSError) as exc:
-            from .provider_fabric import FabricHealth
-
-            omniroute_health = FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
+        ypipe_health = _safe_health(YpipeFabric)
+        free_health = _safe_health(FreeLLMAPIFabric)
+        omniroute_health = _safe_health(OmniRouteFabric)
 
         decision = choose_execution_fabric(
             constraints=state.active_constraints,
             mode=mode,
             ypipe_health=ypipe_health,
+            freellmapi_health=free_health,
             omniroute_health=omniroute_health,
         )
         report = {
@@ -53,16 +54,9 @@ def register(app: typer.Typer, service_factory) -> None:
             "local_required": decision.local_required,
             "selected": decision.selected,
             "reason": decision.reason,
-            "ypipe": {
-                "state": ypipe_health.status,
-                "ready": ypipe_health.ready,
-                "detail": ypipe_health.detail,
-            },
-            "omniroute": {
-                "state": omniroute_health.status,
-                "ready": omniroute_health.ready,
-                "detail": omniroute_health.detail,
-            },
+            "ypipe": {"state": ypipe_health.status, "ready": ypipe_health.ready, "detail": ypipe_health.detail},
+            "freellmapi": {"state": free_health.status, "ready": free_health.ready, "detail": free_health.detail},
+            "omniroute": {"state": omniroute_health.status, "ready": omniroute_health.ready, "detail": omniroute_health.detail},
         }
 
         if json_output:
