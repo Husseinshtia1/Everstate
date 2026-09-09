@@ -82,7 +82,7 @@ def test_real_provider_outage_falls_through_to_next_ready_fabric(tmp_path: Path,
         raise AssertionError("OmniRoute should not be reached after successful FreeLLMAPI fallback")
 
     monkeypatch.setattr("everstate.work_start_cli.execute_fabric_continuation", fake_execute)
-    result = CliRunner().invoke(_app(service), ["start", "Fix checkout outage", "--path", str(root)])
+    result = CliRunner().invoke(_app(service), ["Fix checkout outage", "--path", str(root)])
 
     assert result.exit_code == 0, result.output
     assert attempts == ["ypipe", "freellmapi"]
@@ -110,7 +110,7 @@ def test_identity_drift_on_first_fabric_can_fail_over_without_mutating_state(tmp
 
     monkeypatch.setattr("everstate.work_start_cli.execute_fabric_continuation", fake_execute)
     before = service.status(root).version
-    result = CliRunner().invoke(_app(service), ["start", "Reconcile invoices", "--path", str(root)])
+    result = CliRunner().invoke(_app(service), ["Reconcile invoices", "--path", str(root)])
 
     assert result.exit_code == 0, result.output
     assert attempts == ["ypipe", "freellmapi"]
@@ -134,7 +134,7 @@ def test_all_execution_fabrics_can_fail_without_losing_semantic_checkpoint(tmp_p
     monkeypatch.setattr("everstate.work_start_cli.execute_fabric_continuation", always_fail)
     result = CliRunner().invoke(
         _app(service),
-        ["start", "Contain production incident", "--path", str(root), "--next-action", "Inspect last known healthy deploy"],
+        ["Contain production incident", "--path", str(root), "--next-action", "Inspect last known healthy deploy"],
     )
 
     assert result.exit_code == 2
@@ -158,7 +158,7 @@ def test_local_only_failure_never_attempts_remote_fabrics(tmp_path: Path, monkey
         raise ExecutionFabricError("local runtime exhausted memory")
 
     monkeypatch.setattr("everstate.work_start_cli.execute_fabric_continuation", local_failure)
-    result = CliRunner().invoke(_app(service), ["start", "Review private records pipeline", "--path", str(root)])
+    result = CliRunner().invoke(_app(service), ["Review private records pipeline", "--path", str(root)])
 
     assert result.exit_code == 2
     assert attempts == ["ypipe"]
@@ -186,7 +186,7 @@ def test_cloud_preferred_runtime_failure_moves_to_free_then_local(tmp_path: Path
         )
 
     monkeypatch.setattr("everstate.work_start_cli.execute_fabric_continuation", fake_execute)
-    result = CliRunner().invoke(_app(service), ["start", "Generate launch copy", "--path", str(root)])
+    result = CliRunner().invoke(_app(service), ["Generate launch copy", "--path", str(root)])
 
     assert result.exit_code == 0, result.output
     assert attempts == ["omniroute", "freellmapi", "ypipe"]
