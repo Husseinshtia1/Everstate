@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -75,13 +76,71 @@ def load_execution_settings() -> ExecutionSettings:
     return _settings_from_mapping(raw)
 
 
+def _restrict_private_file(path: Path) -> None:
+    """Restrict a settings file to the current user on POSIX and Windows.
+
+    POSIX mode bits do not represent NTFS ACLs. On Windows use icacls to
+    remove inherited ACL entries and grant the current user full control.
+    Failing to secure a file that may contain provider credentials is fatal.
+    """
+    if os.name != "nt":
+        os.chmod(path, 0o600)
+        return
+
+    identity = os.environ.get("USERNAME", "").strip()
+    if not identity:
+        try:
+            identity = subprocess.run(
+                ["whoami"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise OSError("Unable to determine Windows user for private Everstate settings ACL") from exc
+    if not identity:
+        raise OSError("Unable to determine Windows user for private Everstate settings ACL")
+
+    try:
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{identity}:(F)"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise OSError("Unable to restrict Everstate settings file to the current Windows user") from exc
+
+
+def private_file_permissions_enforced(path: Path) -> bool:
+    """Return whether Everstate's platform-appropriate private-file rule holds."""
+    if os.name != "nt":
+        return (path.stat().st_mode & 0o777) == 0o600
+
+    try:
+        completed = subprocess.run(
+            ["icacls", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    acl = completed.stdout.lower()
+    forbidden = ("everyone:", "builtin\\users:", "authenticated users:")
+    return not any(entry in acl for entry in forbidden)
+
+
 def save_execution_settings(settings: ExecutionSettings) -> Path:
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(asdict(settings), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
+    _restrict_private_file(tmp)
     tmp.replace(path)
+    # Some filesystems can change security metadata on replacement. Re-apply the
+    # final-path policy so secrets are never left with best-effort permissions.
+    _restrict_private_file(path)
     return path
 
 
