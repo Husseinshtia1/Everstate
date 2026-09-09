@@ -58,7 +58,7 @@ class LocalStore:
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
         # A real workstation can have multiple Everstate processes touching the
-        # same local store (CLI, editor integration, agent runner).  Give WAL
+        # same local store (CLI, editor integration, agent runner). Give WAL
         # writers enough time to serialize rather than failing immediately with
         # "database is locked" under ordinary contention.
         conn = sqlite3.connect(self.db_path, timeout=30.0)
@@ -88,6 +88,13 @@ class LocalStore:
                 """,
                 (project_id, name, str(root_path.resolve())),
             )
+
+    def get_project(self, project_id: str) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT * FROM projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
 
     def get_project_by_root(self, root_path: Path) -> sqlite3.Row | None:
         with self.connect() as conn:
@@ -131,10 +138,10 @@ class LocalStore:
             ).fetchall()
 
     def latest_state(self, project_id: str) -> ProjectState | None:
-        # State versions are immutable snapshots.  If an interrupted/manual
+        # State versions are immutable snapshots. If an interrupted/manual
         # filesystem operation corrupts the newest JSON row, fall back to the
         # newest earlier valid snapshot instead of making the project
-        # unreadable.  We intentionally do not mutate/delete evidence here.
+        # unreadable. We intentionally do not mutate/delete evidence here.
         with self.connect() as conn:
             rows = conn.execute(
                 """
