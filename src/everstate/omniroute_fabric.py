@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlparse
 
+from .execution_config import configured_value
 from .provider_fabric import FabricHealth, FabricResponse, FabricTarget
 
 
@@ -31,7 +32,7 @@ class OmniRouteConfig:
         if timeout <= 0:
             raise ValueError("EVERSTATE_OMNIROUTE_TIMEOUT must be > 0")
         return cls(
-            base_url=os.environ.get("EVERSTATE_OMNIROUTE_URL", cls.base_url),
+            base_url=configured_value("EVERSTATE_OMNIROUTE_URL", "omniroute_url", cls.base_url) or cls.base_url,
             api_key=os.environ.get("EVERSTATE_OMNIROUTE_API_KEY"),
             timeout=timeout,
         )
