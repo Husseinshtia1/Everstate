@@ -1,4 +1,9 @@
-from everstate.fabric_routing import SovereigntyMode, choose_execution_fabric, constraints_require_local
+from everstate.fabric_routing import (
+    SovereigntyMode,
+    choose_execution_fabric,
+    constraints_require_local,
+    eligible_fabric_order,
+)
 from everstate.provider_fabric import FabricHealth
 
 
@@ -56,3 +61,32 @@ def test_cloud_preferred_uses_omniroute_first() -> None:
 def test_no_ready_fabric_returns_none() -> None:
     decision = choose_execution_fabric(ypipe_health=DOWN, omniroute_health=DOWN)
     assert decision.selected is None
+
+
+def test_auto_exposes_full_runtime_fallback_order() -> None:
+    order = eligible_fabric_order(
+        ypipe_health=READY,
+        freellmapi_health=READY,
+        omniroute_health=READY,
+    )
+    assert order == ("ypipe", "freellmapi", "omniroute")
+
+
+def test_cloud_preferred_exposes_full_runtime_fallback_order() -> None:
+    order = eligible_fabric_order(
+        mode=SovereigntyMode.CLOUD_PREFERRED,
+        ypipe_health=READY,
+        freellmapi_health=READY,
+        omniroute_health=READY,
+    )
+    assert order == ("omniroute", "freellmapi", "ypipe")
+
+
+def test_local_constraints_remove_remote_fabrics_from_runtime_fallback_order() -> None:
+    order = eligible_fabric_order(
+        constraints=["DATA_MUST_NOT_LEAVE_DEVICE"],
+        ypipe_health=READY,
+        freellmapi_health=READY,
+        omniroute_health=READY,
+    )
+    assert order == ("ypipe",)

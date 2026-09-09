@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 
 import typer
 from typer.testing import CliRunner
 
-from everstate.execution_config import ExecutionSettings, config_path, load_execution_settings, save_execution_settings
+from everstate.execution_config import (
+    ExecutionSettings,
+    config_path,
+    load_execution_settings,
+    private_file_permissions_enforced,
+    save_execution_settings,
+)
 from everstate.freellmapi_fabric import FreeLLMAPIConfig
 from everstate.omniroute_fabric import OmniRouteConfig
 from everstate.provider_fabric import FabricHealth
@@ -90,7 +95,7 @@ def test_setup_yes_is_idempotent_and_preserves_saved_values(monkeypatch, tmp_pat
         omniroute_url="http://127.0.0.1:21128/v1",
     )
     saved_path = save_execution_settings(original)
-    assert oct(os.stat(saved_path).st_mode & 0o777) == "0o600"
+    assert private_file_permissions_enforced(saved_path) is True
 
     monkeypatch.setattr(
         "everstate.setup_wizard_cli._probe",
@@ -103,4 +108,4 @@ def test_setup_yes_is_idempotent_and_preserves_saved_values(monkeypatch, tmp_pat
 
     assert result.exit_code == 0, result.output
     assert load_execution_settings() == original
-    assert oct(os.stat(saved_path).st_mode & 0o777) == "0o600"
+    assert private_file_permissions_enforced(saved_path) is True
