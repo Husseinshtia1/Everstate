@@ -67,7 +67,7 @@ def choose_execution_fabric(
             return result("ypipe", "Canonical constraints require local execution and Ypipe is ready.", local=True)
         return result(
             None,
-            "Canonical constraints require local execution, but Ypipe is not ready; all remote fallback is forbidden.",
+            "Canonical constraints require local execution, but Ypipe is not ready; cloud fallback is forbidden, including FreeLLMAPI and OmniRoute.",
             local=True,
         )
 
