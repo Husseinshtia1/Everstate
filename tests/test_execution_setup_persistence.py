@@ -99,7 +99,7 @@ def test_setup_yes_is_idempotent_and_preserves_saved_values(monkeypatch, tmp_pat
 
     app = typer.Typer()
     register_setup(app)
-    result = CliRunner().invoke(app, ["setup", "--yes", "--no-browser"])
+    result = CliRunner().invoke(app, ["--yes", "--no-browser"])
 
     assert result.exit_code == 0, result.output
     assert load_execution_settings() == original
