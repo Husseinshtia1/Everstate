@@ -43,6 +43,10 @@ def _roles(value: str) -> tuple[str, ...]:
     return roles
 
 
+def _council_state_is_stale(initial, latest) -> bool:
+    return initial.project_id != latest.project_id or initial.state_version != latest.state_version
+
+
 def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
     local_only = constraints_require_local(packet.constraints)
     candidate_groups: list[tuple[object, tuple[str, ...]]] = []
@@ -81,8 +85,6 @@ def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
         reason = "No eligible local council participant is ready." if local_only else "No enabled council execution target is ready."
         raise CouncilError(reason)
 
-    # Diversity-first selection: take one model from every ready fabric before
-    # taking a second model from any one fabric.
     candidates: list[tuple[object, str]] = []
     depth = 0
     while True:
@@ -176,11 +178,8 @@ def register(app: typer.Typer, service_factory) -> None:
             console.print("[dim]No council response was allowed to mutate canonical Everstate state.[/dim]")
             raise typer.Exit(code=2) from exc
 
-        # A council can run for minutes. If the project changes while it is
-        # deliberating, its result is valid historical advice but no longer a
-        # recommendation for the current canonical state.
         latest = service.continuation_packet(path)
-        state_stale = latest.project_id != packet.project_id or latest.state_version != packet.state_version
+        state_stale = _council_state_is_stale(packet, latest)
 
         report = asdict(result)
         report["mode"] = result.mode.value
