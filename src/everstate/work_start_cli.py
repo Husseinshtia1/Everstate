@@ -10,7 +10,7 @@ from rich.panel import Panel
 from .continuation_readiness import assess_continuation_readiness
 from .execution_config import configured_policy, fabric_enabled
 from .execution_fabric_continuation import ExecutionFabricError, execute_fabric_continuation
-from .fabric_routing import SovereigntyMode, choose_execution_fabric
+from .fabric_routing import SovereigntyMode, choose_execution_fabric, eligible_fabric_order
 from .freellmapi_fabric import FreeLLMAPIError, FreeLLMAPIFabric
 from .handoff import launch_handoff, prepare_handoff
 from .omniroute_fabric import OmniRouteError, OmniRouteFabric
@@ -89,29 +89,50 @@ def register(app: typer.Typer, service_factory) -> None:
                 freellmapi_health=health["freellmapi"],
                 omniroute_health=health["omniroute"],
             )
+            order = eligible_fabric_order(
+                constraints=packet.constraints,
+                mode=mode,
+                ypipe_health=health["ypipe"],
+                freellmapi_health=health["freellmapi"],
+                omniroute_health=health["omniroute"],
+            )
             console.print(f"Automatic route: [cyan]{decision.selected or 'NONE'}[/cyan] — {decision.reason}")
+            if order:
+                console.print(f"Runtime fallback order: [dim]{' -> '.join(order)}[/dim]")
             if decision.selected is None:
                 console.print("[red]No eligible execution fabric is ready. The checkpoint remains safely persisted.[/red]")
                 raise typer.Exit(code=2)
             if dry_run:
                 console.print("[green]Checkpoint persisted and automatic route validated; no AI was contacted.[/green]")
                 return
-            fabric = fabrics[decision.selected]
-            if fabric is None:
-                raise typer.Exit(code=2)
-            try:
-                result = execute_fabric_continuation(fabric, packet, verify_identity=True)
-            except (ExecutionFabricError, YpipeError, FreeLLMAPIError, OmniRouteError, ValueError) as exc:
-                console.print(f"[red]Automatic continuation failed:[/red] {exc}")
-                console.print("[dim]The semantic checkpoint remains persisted despite execution failure.[/dim]")
-                raise typer.Exit(code=2) from exc
-            console.print(
-                f"Continuation succeeded via [cyan]{result.fabric}[/cyan] target {result.target}; "
-                f"identity verified: {result.verified_identity}"
-            )
-            console.print_json(json.dumps(result.response))
-            console.print("[dim]Canonical Everstate state was not mutated by the execution response.[/dim]")
-            return
+
+            failures: list[tuple[str, str]] = []
+            for fabric_name in order:
+                fabric = fabrics[fabric_name]
+                if fabric is None:
+                    failures.append((fabric_name, "fabric became unavailable after health probe"))
+                    continue
+                try:
+                    result = execute_fabric_continuation(fabric, packet, verify_identity=True)
+                except (ExecutionFabricError, YpipeError, FreeLLMAPIError, OmniRouteError, ValueError, OSError) as exc:
+                    failures.append((fabric_name, str(exc)))
+                    console.print(f"[yellow]{fabric_name} execution failed; trying next policy-safe fabric:[/yellow] {exc}")
+                    continue
+
+                console.print(
+                    f"Continuation succeeded via [cyan]{result.fabric}[/cyan] target {result.target}; "
+                    f"identity verified: {result.verified_identity}"
+                )
+                console.print_json(json.dumps(result.response))
+                if failures:
+                    console.print("[dim]Earlier automatic attempts failed but the checkpoint was preserved throughout failover.[/dim]")
+                console.print("[dim]Canonical Everstate state was not mutated by the execution response.[/dim]")
+                return
+
+            console.print("[red]All policy-eligible execution fabrics failed. The semantic checkpoint remains persisted.[/red]")
+            for fabric_name, detail in failures:
+                console.print(f"- {fabric_name}: {detail}")
+            raise typer.Exit(code=2)
 
         if target == "ypipe":
             config = YpipeConfig.from_env()
