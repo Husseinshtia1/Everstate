@@ -142,7 +142,7 @@ def test_all_execution_fabrics_can_fail_without_losing_semantic_checkpoint(tmp_p
     state = service.status(root)
     assert state.current_task == "Contain production incident"
     assert state.next_action == "Inspect last known healthy deploy"
-    assert "checkpoint remains persisted" in result.output.lower()
+    assert "all policy-eligible execution fabrics failed" in result.output.lower()
 
 
 def test_local_only_failure_never_attempts_remote_fabrics(tmp_path: Path, monkeypatch) -> None:
