@@ -8,6 +8,7 @@ from .fabric_check_cli import register as register_fabric_check
 from .fabric_continue_cli import register as register_fabric_continue
 from .fabric_route_cli import register as register_fabric_route
 from .omniroute_check_cli import register as register_omniroute_check
+from .setup_wizard_cli import register as register_setup
 from .work_start_cli import register as register_work_start
 from .ypipe_check_cli import register as register_ypipe_check
 from .ypipe_continue_cli import register as register_ypipe_continue
@@ -29,6 +30,7 @@ _cli._db_path = runtime_db_path
 app = _cli.app
 
 # Register additive runtime-aware workflows without changing legacy command behavior.
+register_setup(app)
 register_work_start(app, _cli._service)
 register_omniroute_check(app)
 register_ypipe_check(app)
