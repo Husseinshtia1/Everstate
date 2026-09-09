@@ -82,8 +82,7 @@ def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
         raise CouncilError(reason)
 
     # Diversity-first selection: take one model from every ready fabric before
-    # taking a second model from any one fabric. This makes independent review
-    # more likely while still allowing a local-only council to use several Ypipe models.
+    # taking a second model from any one fabric.
     candidates: list[tuple[object, str]] = []
     depth = 0
     while True:
@@ -96,11 +95,13 @@ def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
             break
         depth += 1
 
-    limit = min(max_agents, len(roles))
+    limit = min(max_agents, len(roles), len(candidates))
     participants = []
     for index, role in enumerate(roles[:limit]):
-        fabric, model = candidates[index % len(candidates)]
-        participants.append(CouncilParticipant(role=role, fabric=fabric, model=model))
+        fabric, model = candidates[index]
+        participants.append(
+            CouncilParticipant(role=role, fabric=fabric, model=model, local=fabric.name == "ypipe")
+        )
     return tuple(participants), health_report, local_only
 
 
@@ -113,6 +114,7 @@ def register(app: typer.Typer, service_factory) -> None:
         roles: str = typer.Option(",".join(_DEFAULT_ROLES), "--roles", help="Comma-separated independent council roles."),
         max_agents: int = typer.Option(3, "--max-agents", min=1, max=8),
         rounds: int = typer.Option(2, "--rounds", min=1, max=5, help="Used by debate mode; parallel review always runs one round."),
+        min_successful: int | None = typer.Option(None, "--min-successful", min=1, max=8, help="Required successful agents per round; default is majority quorum."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Show eligible agents without contacting any model."),
         json_output: bool = typer.Option(False, "--json"),
     ) -> None:
@@ -125,6 +127,12 @@ def register(app: typer.Typer, service_factory) -> None:
         except CouncilError as exc:
             console.print(f"[red]AgentCouncil unavailable:[/red] {exc}")
             raise typer.Exit(code=2) from exc
+
+        if min_successful is not None and min_successful > len(participants):
+            raise typer.BadParameter(
+                "--min-successful cannot exceed the selected participant count",
+                param_hint="--min-successful",
+            )
 
         plan = {
             "project_id": packet.project_id,
@@ -161,16 +169,27 @@ def register(app: typer.Typer, service_factory) -> None:
                 participants=participants,
                 mode=mode,
                 rounds=rounds,
+                min_successful=min_successful,
             )
         except CouncilError as exc:
             console.print(f"[red]AgentCouncil failed:[/red] {exc}")
             console.print("[dim]No council response was allowed to mutate canonical Everstate state.[/dim]")
             raise typer.Exit(code=2) from exc
 
+        # A council can run for minutes. If the project changes while it is
+        # deliberating, its result is valid historical advice but no longer a
+        # recommendation for the current canonical state.
+        latest = service.continuation_packet(path)
+        state_stale = latest.project_id != packet.project_id or latest.state_version != packet.state_version
+
         report = asdict(result)
         report["mode"] = result.mode.value
+        report["state_stale"] = state_stale
+        report["latest_state_version"] = latest.state_version
         if json_output:
             console.print_json(json.dumps(report))
+            if state_stale:
+                raise typer.Exit(code=3)
             return
 
         console.print(Panel.fit(
@@ -178,18 +197,33 @@ def register(app: typer.Typer, service_factory) -> None:
             f"Mode: {result.mode.value}\n"
             f"Consensus: {result.consensus}\n"
             f"Average confidence: {result.average_confidence:.2f}\n"
+            f"Evidence coverage: {result.evidence_coverage:.0%}\n"
             f"Opinions: {len(result.opinions)}\n"
+            f"Participant failures: {len(result.failures)}\n"
+            f"State stale: {state_stale}\n"
             "Canonical state mutated: False",
             title="Everstate AgentCouncil",
         ))
         for opinion in result.opinions:
             console.print(
                 f"[bold]{opinion.role}[/bold] ({opinion.fabric}/{opinion.model}, round {opinion.round})\n"
+                f"Verdict: {opinion.verdict.value}\n"
                 f"Recommendation: {opinion.recommendation}\n"
                 f"Reasoning: {opinion.reasoning}\n"
                 f"Risks: {', '.join(opinion.risks) or 'None surfaced'}\n"
+                f"Evidence: {', '.join(opinion.evidence) or 'None supplied'}\n"
             )
+        if result.failures:
+            console.print("[yellow]Participant failures (excluded from consensus):[/yellow]")
+            for failure in result.failures:
+                console.print(f"- round {failure.round} {failure.participant_id}: {failure.error}")
         if result.disagreements:
             console.print("[yellow]Disagreements:[/yellow]")
             for disagreement in result.disagreements:
                 console.print(f"- {disagreement}")
+        if state_stale:
+            console.print(
+                f"[red]Council result is stale: canonical state advanced from {packet.state_version} "
+                f"to {latest.state_version}. Re-run the council before acting on it.[/red]"
+            )
+            raise typer.Exit(code=3)
