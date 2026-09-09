@@ -12,56 +12,56 @@ from .execution_config import configured_value
 from .provider_fabric import FabricHealth, FabricResponse, FabricTarget
 
 
-class OmniRouteError(RuntimeError):
+class FreeLLMAPIError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
-class OmniRouteConfig:
-    base_url: str = "http://127.0.0.1:20128/v1"
+class FreeLLMAPIConfig:
+    base_url: str = "http://127.0.0.1:3001/v1"
     api_key: str | None = field(default=None, repr=False)
-    timeout: float = 3.0
+    timeout: float = 5.0
 
     @classmethod
-    def from_env(cls) -> "OmniRouteConfig":
-        timeout_raw = os.environ.get("EVERSTATE_OMNIROUTE_TIMEOUT", "3.0")
+    def from_env(cls) -> "FreeLLMAPIConfig":
+        timeout_raw = os.environ.get("EVERSTATE_FREELLMAPI_TIMEOUT", "5.0")
         try:
             timeout = float(timeout_raw)
         except ValueError as exc:
-            raise ValueError("EVERSTATE_OMNIROUTE_TIMEOUT must be a number") from exc
+            raise ValueError("EVERSTATE_FREELLMAPI_TIMEOUT must be a number") from exc
         if timeout <= 0:
-            raise ValueError("EVERSTATE_OMNIROUTE_TIMEOUT must be > 0")
+            raise ValueError("EVERSTATE_FREELLMAPI_TIMEOUT must be > 0")
         return cls(
-            base_url=configured_value("EVERSTATE_OMNIROUTE_URL", "omniroute_url", cls.base_url) or cls.base_url,
-            api_key=os.environ.get("EVERSTATE_OMNIROUTE_API_KEY"),
+            base_url=configured_value("EVERSTATE_FREELLMAPI_URL", "freellmapi_url", cls.base_url) or cls.base_url,
+            api_key=os.environ.get("EVERSTATE_FREELLMAPI_API_KEY")
+            or configured_value("EVERSTATE_FREELLMAPI_API_KEY", "freellmapi_api_key"),
             timeout=timeout,
         )
 
 
-class OmniRouteFabric:
-    name = "omniroute"
+class FreeLLMAPIFabric:
+    """OpenAI-compatible adapter for a locally hosted FreeLLMAPI router.
+
+    FreeLLMAPI may route requests to remote providers. Everstate therefore treats
+    this fabric as remote/free capacity and never selects it for local-only work.
+    """
+
+    name = "freellmapi"
 
     def __init__(
         self,
-        config: OmniRouteConfig | None = None,
+        config: FreeLLMAPIConfig | None = None,
         *,
         opener: Callable[..., object] = urllib.request.urlopen,
     ) -> None:
-        self.config = config or OmniRouteConfig.from_env()
+        self.config = config or FreeLLMAPIConfig.from_env()
         self._opener = opener
         parsed = urlparse(self.config.base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("OmniRoute base URL must be an absolute http(s) URL")
+            raise ValueError("FreeLLMAPI base URL must be an absolute http(s) URL")
         self._base_url = self.config.base_url.rstrip("/")
 
-    def _request_json(
-        self,
-        method: str,
-        path: str,
-        *,
-        payload: dict | None = None,
-        timeout: float | None = None,
-    ) -> dict:
+    def _request_json(self, method: str, path: str, *, payload: dict | None = None, timeout: float | None = None) -> dict:
         headers = {"Accept": "application/json"}
         body = None
         if payload is not None:
@@ -69,7 +69,6 @@ class OmniRouteFabric:
             body = json.dumps(payload).encode("utf-8")
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
-
         request = urllib.request.Request(
             f"{self._base_url}/{path.lstrip('/')}",
             data=body,
@@ -79,40 +78,24 @@ class OmniRouteFabric:
         try:
             response = self._opener(request, timeout=timeout or self.config.timeout)
             raw = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise FreeLLMAPIError(f"FreeLLMAPI HTTP {exc.code}: {detail or exc.reason}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise OmniRouteError(f"OmniRoute request failed: {exc}") from exc
-
+            raise FreeLLMAPIError(f"FreeLLMAPI request failed: {exc}") from exc
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise OmniRouteError("OmniRoute returned invalid JSON") from exc
+            raise FreeLLMAPIError("FreeLLMAPI returned invalid JSON") from exc
         if not isinstance(decoded, dict):
-            raise OmniRouteError("OmniRoute returned a non-object JSON response")
+            raise FreeLLMAPIError("FreeLLMAPI returned a non-object JSON response")
         return decoded
-
-    def health(self) -> FabricHealth:
-        try:
-            targets = self.discover_targets()
-        except OmniRouteError as exc:
-            return FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
-        if not targets:
-            return FabricHealth(
-                status="DEGRADED",
-                ready=False,
-                detail="OmniRoute is reachable but reported no models.",
-            )
-        return FabricHealth(
-            status="READY",
-            ready=True,
-            detail=f"OmniRoute is reachable with {len(targets)} model target(s).",
-        )
 
     def discover_targets(self) -> tuple[FabricTarget, ...]:
         payload = self._request_json("GET", "models")
         rows = payload.get("data")
         if not isinstance(rows, list):
-            raise OmniRouteError("OmniRoute /models response is missing a data list")
-
+            raise FreeLLMAPIError("FreeLLMAPI /models response is missing a data list")
         targets: list[FabricTarget] = []
         for row in rows:
             if not isinstance(row, dict):
@@ -122,20 +105,26 @@ class OmniRouteFabric:
                 continue
             provider = row.get("owned_by") if isinstance(row.get("owned_by"), str) else None
             targets.append(FabricTarget(id=model_id, provider=provider, model=model_id))
+        # FreeLLMAPI exposes a virtual `auto` model for its own smart router.
+        # Prefer it when available so Everstate delegates provider/model failover
+        # to the service instead of pinning an arbitrary first catalog entry.
+        targets.sort(key=lambda target: (target.id != "auto", target.id))
         return tuple(targets)
 
-    def execute(
-        self,
-        *,
-        model: str,
-        messages: list[dict],
-        timeout: float | None = None,
-    ) -> FabricResponse:
+    def health(self) -> FabricHealth:
+        try:
+            targets = self.discover_targets()
+        except FreeLLMAPIError as exc:
+            return FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
+        if not targets:
+            return FabricHealth(status="DEGRADED", ready=False, detail="FreeLLMAPI is reachable but reported no models.")
+        return FabricHealth(status="READY", ready=True, detail=f"FreeLLMAPI is reachable with {len(targets)} model target(s).")
+
+    def execute(self, *, model: str, messages: list[dict], timeout: float | None = None) -> FabricResponse:
         if not model.strip():
             raise ValueError("model must not be empty")
         if not messages:
             raise ValueError("messages must not be empty")
-
         payload = self._request_json(
             "POST",
             "chat/completions",
@@ -144,11 +133,11 @@ class OmniRouteFabric:
         )
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise OmniRouteError("OmniRoute chat response is missing choices")
+            raise FreeLLMAPIError("FreeLLMAPI chat response is missing choices")
         first = choices[0]
         if not isinstance(first, dict):
-            raise OmniRouteError("OmniRoute chat response has an invalid first choice")
+            raise FreeLLMAPIError("FreeLLMAPI chat response has an invalid first choice")
         message = first.get("message")
         if not isinstance(message, dict) or not isinstance(message.get("content"), str):
-            raise OmniRouteError("OmniRoute chat response is missing message content")
+            raise FreeLLMAPIError("FreeLLMAPI chat response is missing message content")
         return FabricResponse(target=model, content=message["content"], raw=payload)
