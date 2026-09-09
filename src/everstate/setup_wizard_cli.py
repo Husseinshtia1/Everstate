@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import webbrowser
-from dataclasses import replace
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .execution_config import ExecutionSettings, save_execution_settings
+from .execution_config import ExecutionSettings, load_execution_settings, save_execution_settings
 from .freellmapi_fabric import FreeLLMAPIConfig, FreeLLMAPIFabric
 from .omniroute_fabric import OmniRouteConfig, OmniRouteFabric
 from .provider_fabric import FabricHealth
@@ -42,7 +42,12 @@ def _policy_prompt(default: str = "auto") -> str:
     console.print("  [cyan]2[/cyan] Local only: never send project state to remote providers")
     console.print("  [cyan]3[/cyan] Cloud preferred: OmniRoute → FreeLLMAPI → local")
     choice = typer.prompt("Choose", default={"auto": "1", "local-only": "2", "cloud-preferred": "3"}.get(default, "1"))
-    return {"1": "auto", "2": "local-only", "3": "cloud-preferred"}.get(choice.strip(), "auto")
+    return {"1": "auto", "2": "local-only", "3": "cloud-preferred"}.get(choice.strip(), default)
+
+
+def _effective_value(env_name: str, saved: str) -> str:
+    value = os.environ.get(env_name)
+    return value.strip() if isinstance(value, str) and value.strip() else saved
 
 
 def register(app: typer.Typer) -> None:
@@ -56,12 +61,18 @@ def register(app: typer.Typer) -> None:
         """Discover, configure, and validate Everstate execution fabrics interactively."""
         console.print(Panel.fit("Automatic execution discovery and configuration", title="Everstate Setup"))
 
-        ypipe_url = YpipeConfig.base_url
-        free_url = FreeLLMAPIConfig.base_url
-        omni_url = OmniRouteConfig.base_url
+        current = load_execution_settings()
+        ypipe_url = _effective_value("EVERSTATE_YPIPE_URL", current.ypipe_url)
+        free_url = _effective_value("EVERSTATE_FREELLMAPI_URL", current.freellmapi_url)
+        omni_url = _effective_value("EVERSTATE_OMNIROUTE_URL", current.omniroute_url)
+        effective_free_token = (
+            freellmapi_token
+            or os.environ.get("EVERSTATE_FREELLMAPI_API_KEY")
+            or current.freellmapi_api_key
+        )
 
         ypipe_health = _probe(lambda: YpipeFabric(YpipeConfig(base_url=ypipe_url)))
-        free_health = _probe(lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=freellmapi_token)))
+        free_health = _probe(lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=effective_free_token)))
         omni_health = _probe(lambda: OmniRouteFabric(OmniRouteConfig(base_url=omni_url)))
 
         table = Table(title="Detected execution fabrics")
@@ -69,9 +80,10 @@ def register(app: typer.Typer) -> None:
         table.add_column("Role")
         table.add_column("State")
         table.add_column("Ready")
-        table.add_row("Ypipe", "LOCAL_SOVEREIGN", ypipe_health.status, str(ypipe_health.ready))
-        table.add_row("FreeLLMAPI", "FREE_REMOTE", free_health.status, str(free_health.ready))
-        table.add_row("OmniRoute", "REMOTE_MULTI_PROVIDER", omni_health.status, str(omni_health.ready))
+        table.add_column("Endpoint")
+        table.add_row("Ypipe", "LOCAL_SOVEREIGN", ypipe_health.status, str(ypipe_health.ready), ypipe_url)
+        table.add_row("FreeLLMAPI", "FREE_REMOTE", free_health.status, str(free_health.ready), free_url)
+        table.add_row("OmniRoute", "REMOTE_MULTI_PROVIDER", omni_health.status, str(omni_health.ready), omni_url)
         console.print(table)
 
         if not free_health.ready:
@@ -80,20 +92,31 @@ def register(app: typer.Typer) -> None:
                 installed, detail = _install_freellmapi()
                 console.print(f"[{'green' if installed else 'yellow'}]{detail}[/]")
                 if installed:
-                    free_health = _probe(lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=freellmapi_token)))
+                    free_health = _probe(
+                        lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=effective_free_token))
+                    )
 
         if not free_health.ready and "401" in free_health.detail:
-            if freellmapi_token is None and not yes:
+            if effective_free_token is None and not yes:
                 if not no_browser:
                     webbrowser.open("http://127.0.0.1:3001")
-                console.print("FreeLLMAPI is running but requires its unified token. Add provider keys in the local dashboard, then copy the unified token.")
-                freellmapi_token = typer.prompt("FreeLLMAPI unified token", hide_input=True).strip() or None
-                free_health = _probe(lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=freellmapi_token)))
+                console.print(
+                    "FreeLLMAPI is running but requires its unified token. "
+                    "Add provider keys in the local dashboard, then copy the unified token."
+                )
+                effective_free_token = typer.prompt("FreeLLMAPI unified token", hide_input=True).strip() or None
+                free_health = _probe(
+                    lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=effective_free_token))
+                )
 
-        policy = "auto" if yes else _policy_prompt()
-        enable_ypipe = ypipe_health.ready if yes else typer.confirm("Enable Ypipe when available?", default=True)
-        enable_free = free_health.ready if yes else typer.confirm("Enable FreeLLMAPI when available?", default=True)
-        enable_omni = omni_health.ready if yes else typer.confirm("Enable OmniRoute when available?", default=True)
+        policy = current.policy if yes else _policy_prompt(current.policy)
+        enable_ypipe = current.ypipe_enabled if yes else typer.confirm("Enable Ypipe when available?", default=current.ypipe_enabled)
+        enable_free = current.freellmapi_enabled if yes else typer.confirm(
+            "Enable FreeLLMAPI when available?", default=current.freellmapi_enabled
+        )
+        enable_omni = current.omniroute_enabled if yes else typer.confirm(
+            "Enable OmniRoute when available?", default=current.omniroute_enabled
+        )
 
         if policy == "local-only":
             enable_free = False
@@ -105,14 +128,14 @@ def register(app: typer.Typer) -> None:
             ypipe_url=ypipe_url,
             freellmapi_enabled=enable_free,
             freellmapi_url=free_url,
-            freellmapi_api_key=freellmapi_token,
+            freellmapi_api_key=effective_free_token,
             omniroute_enabled=enable_omni,
             omniroute_url=omni_url,
         )
         path = save_execution_settings(settings)
 
-        # Re-probe from exactly what was persisted so setup cannot claim success
-        # based on transient values different from future Everstate runs.
+        # Re-probe through the normal runtime constructors. This validates the
+        # exact persisted settings path used by future `everstate start` calls.
         final_free = _probe(FreeLLMAPIFabric) if enable_free else FabricHealth("DISABLED", False, "Disabled by setup policy.")
         final_ypipe = _probe(YpipeFabric) if enable_ypipe else FabricHealth("DISABLED", False, "Disabled by setup policy.")
         final_omni = _probe(OmniRouteFabric) if enable_omni else FabricHealth("DISABLED", False, "Disabled by setup policy.")
@@ -125,7 +148,10 @@ def register(app: typer.Typer) -> None:
         console.print(f"OmniRoute: {final_omni.status}")
 
         if policy == "local-only" and not final_ypipe.ready:
-            console.print("[red]Local-only was selected but Ypipe is not ready. Everstate will fail closed rather than use remote execution.[/red]")
+            console.print(
+                "[red]Local-only was selected but Ypipe is not ready. "
+                "Everstate will fail closed rather than use remote execution.[/red]"
+            )
             raise typer.Exit(code=2)
 
         if not any(health.ready for health in (final_ypipe, final_free, final_omni)):
