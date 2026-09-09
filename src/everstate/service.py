@@ -54,8 +54,6 @@ def _write_identity_marker(root: Path, project_id: str) -> None:
         )
         tmp.replace(path)
     except OSError:
-        # A read-only workspace must still be usable. Relocation continuity is
-        # unavailable without the marker, but canonical state remains valid.
         return
 
 
@@ -70,20 +68,17 @@ class EverstateService:
 
         existing = self.store.get_project(marker_id)
         if existing is None:
-            # This supports restoring an identity marker together with a store
-            # backup on another machine without deriving identity from a path.
             return marker_id
 
         existing_root = Path(existing["root_path"])
         if existing_root.resolve() == root.resolve():
             return marker_id
-
-        # Treat the marker as a relocation only when the previous location no
-        # longer exists. If both locations exist, this is a copy/clone and must
-        # not silently hijack or merge the original project's canonical state.
         if not existing_root.exists():
             return marker_id
         return stable_project_id(root)
+
+    def _fresh_state(self, project_id: str) -> ProjectState:
+        return ProjectState(project_id=project_id, version=self.store.next_state_version(project_id))
 
     def init_project(self, root: Path) -> str:
         root = root.resolve()
@@ -94,8 +89,6 @@ class EverstateService:
         try:
             event = snapshot_event(project_id, root)
         except RuntimeError:
-            # Everstate projects do not require Git. A non-Git workspace starts
-            # with a canonical state but without Git-derived file evidence.
             if self.store.latest_state(project_id) is None:
                 event = Event(
                     project_id=project_id,
@@ -106,7 +99,7 @@ class EverstateService:
                     payload={"root": str(root), "git_backed": False},
                 )
                 self.store.append_event(event)
-                self.store.save_state(ProjectState(project_id=project_id, version=1))
+                self.store.save_state(self._fresh_state(project_id))
             return project_id
 
         self.store.append_event(event)
@@ -131,15 +124,12 @@ class EverstateService:
             latest = self.store.latest_state(project_id)
             if latest is not None:
                 return latest
-            state = ProjectState(project_id=project_id, version=1)
+            state = self._fresh_state(project_id)
             self.store.save_state(state)
             return state
 
         recent_events = self.store.list_events(project_id, limit=200)
-        latest_git_event = next(
-            (row for row in recent_events if row["event_type"] == "git_snapshot"),
-            None,
-        )
+        latest_git_event = next((row for row in recent_events if row["event_type"] == "git_snapshot"), None)
         if latest_git_event is None or latest_git_event["content_hash"] != event.content_hash:
             self.store.append_event(event)
             return self._materialize_git_state(project_id, event.payload)
@@ -151,11 +141,10 @@ class EverstateService:
     def _materialize_git_state(self, project_id: str, payload: dict) -> ProjectState:
         for attempt in range(_MAX_STATE_WRITE_RETRIES):
             previous = self.store.latest_state(project_id)
-            version = 1 if previous is None else previous.version + 1
             modified_files = list(payload.get("modified_files") or [])
             state = ProjectState(
                 project_id=project_id,
-                version=version,
+                version=self.store.next_state_version(project_id),
                 objective=previous.objective if previous else None,
                 current_task=previous.current_task if previous else None,
                 active_constraints=list(previous.active_constraints) if previous else [],
@@ -175,7 +164,7 @@ class EverstateService:
         raise RuntimeError("Everstate could not serialize Git state update")
 
     @staticmethod
-    def _state_with_event(current: ProjectState, event_type: str, payload: dict) -> ProjectState:
+    def _state_with_event(current: ProjectState, event_type: str, payload: dict, *, version: int) -> ProjectState:
         objective = current.objective
         current_task = current.current_task
         constraints = list(current.active_constraints)
@@ -212,7 +201,7 @@ class EverstateService:
 
         return ProjectState(
             project_id=current.project_id,
-            version=current.version + 1,
+            version=version,
             objective=objective,
             current_task=current_task,
             active_constraints=constraints,
@@ -236,12 +225,14 @@ class EverstateService:
         )
         self.store.append_event(event)
 
-        # Multiple agents/CLIs can legitimately mutate the same project at
-        # once. Re-read and re-apply the immutable event when another writer
-        # wins the same version number instead of losing one user's update.
         for attempt in range(_MAX_STATE_WRITE_RETRIES):
             current = self.refresh_project(root)
-            state = self._state_with_event(current, event_type, payload)
+            state = self._state_with_event(
+                current,
+                event_type,
+                payload,
+                version=self.store.next_state_version(project_id),
+            )
             try:
                 self.store.save_state(state)
                 return state
