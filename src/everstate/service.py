@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from pathlib import Path
 
 from .continuity import ContinuationPacket
@@ -12,7 +11,6 @@ from .storage import LocalStore
 
 
 _IDENTITY_MARKER = Path(".everstate") / "project.json"
-_MAX_STATE_WRITE_RETRIES = 12
 
 
 def stable_project_id(root: Path) -> str:
@@ -99,7 +97,12 @@ class EverstateService:
                     payload={"root": str(root), "git_backed": False},
                 )
                 self.store.append_event(event)
-                self.store.save_state(self._fresh_state(project_id))
+                self.store.mutate_state(
+                    project_id,
+                    lambda current, version: current
+                    if current is not None
+                    else ProjectState(project_id=project_id, version=version),
+                )
             return project_id
 
         self.store.append_event(event)
@@ -124,9 +127,12 @@ class EverstateService:
             latest = self.store.latest_state(project_id)
             if latest is not None:
                 return latest
-            state = self._fresh_state(project_id)
-            self.store.save_state(state)
-            return state
+            return self.store.mutate_state(
+                project_id,
+                lambda current, version: current
+                if current is not None
+                else ProjectState(project_id=project_id, version=version),
+            )
 
         recent_events = self.store.list_events(project_id, limit=200)
         latest_git_event = next((row for row in recent_events if row["event_type"] == "git_snapshot"), None)
@@ -139,12 +145,12 @@ class EverstateService:
         return latest
 
     def _materialize_git_state(self, project_id: str, payload: dict) -> ProjectState:
-        for attempt in range(_MAX_STATE_WRITE_RETRIES):
-            previous = self.store.latest_state(project_id)
-            modified_files = list(payload.get("modified_files") or [])
-            state = ProjectState(
+        modified_files = list(payload.get("modified_files") or [])
+
+        def mutation(previous: ProjectState | None, version: int) -> ProjectState:
+            return ProjectState(
                 project_id=project_id,
-                version=self.store.next_state_version(project_id),
+                version=version,
                 objective=previous.objective if previous else None,
                 current_task=previous.current_task if previous else None,
                 active_constraints=list(previous.active_constraints) if previous else [],
@@ -155,23 +161,25 @@ class EverstateService:
                 next_action=previous.next_action if previous else None,
                 unresolved_conflicts=list(previous.unresolved_conflicts) if previous else [],
             )
-            try:
-                self.store.save_state(state)
-                return state
-            except sqlite3.IntegrityError:
-                if attempt + 1 >= _MAX_STATE_WRITE_RETRIES:
-                    raise
-        raise RuntimeError("Everstate could not serialize Git state update")
+
+        return self.store.mutate_state(project_id, mutation)
 
     @staticmethod
-    def _state_with_event(current: ProjectState, event_type: str, payload: dict, *, version: int) -> ProjectState:
-        objective = current.objective
-        current_task = current.current_task
-        constraints = list(current.active_constraints)
-        decisions = list(current.decisions)
-        failures = list(current.failed_attempts)
-        blockers = list(current.blockers)
-        next_action = current.next_action
+    def _state_with_event(
+        current: ProjectState | None,
+        project_id: str,
+        event_type: str,
+        payload: dict,
+        *,
+        version: int,
+    ) -> ProjectState:
+        objective = current.objective if current else None
+        current_task = current.current_task if current else None
+        constraints = list(current.active_constraints) if current else []
+        decisions = list(current.decisions) if current else []
+        failures = list(current.failed_attempts) if current else []
+        blockers = list(current.blockers) if current else []
+        next_action = current.next_action if current else None
 
         value = str(payload.get("value", "")).strip()
         if event_type == "objective_set":
@@ -200,7 +208,7 @@ class EverstateService:
             raise ValueError(f"Unsupported state event: {event_type}")
 
         return ProjectState(
-            project_id=current.project_id,
+            project_id=project_id,
             version=version,
             objective=objective,
             current_task=current_task,
@@ -208,9 +216,9 @@ class EverstateService:
             decisions=decisions,
             failed_attempts=failures,
             blockers=blockers,
-            modified_files=list(current.modified_files),
+            modified_files=list(current.modified_files) if current else [],
             next_action=next_action,
-            unresolved_conflicts=list(current.unresolved_conflicts),
+            unresolved_conflicts=list(current.unresolved_conflicts) if current else [],
         )
 
     def _record_state_event(self, root: Path, event_type: str, payload: dict) -> ProjectState:
@@ -225,21 +233,16 @@ class EverstateService:
         )
         self.store.append_event(event)
 
-        for attempt in range(_MAX_STATE_WRITE_RETRIES):
-            current = self.refresh_project(root)
-            state = self._state_with_event(
+        return self.store.mutate_state(
+            project_id,
+            lambda current, version: self._state_with_event(
                 current,
+                project_id,
                 event_type,
                 payload,
-                version=self.store.next_state_version(project_id),
-            )
-            try:
-                self.store.save_state(state)
-                return state
-            except sqlite3.IntegrityError:
-                if attempt + 1 >= _MAX_STATE_WRITE_RETRIES:
-                    raise
-        raise RuntimeError("Everstate could not serialize concurrent state update")
+                version=version,
+            ),
+        )
 
     def set_objective(self, root: Path, value: str) -> ProjectState:
         return self._record_state_event(root, "objective_set", {"value": value})
