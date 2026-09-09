@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from .execution_config import configured_policy, fabric_enabled
 from .fabric_routing import SovereigntyMode, choose_execution_fabric
 from .freellmapi_fabric import FreeLLMAPIFabric
 from .omniroute_fabric import OmniRouteFabric
@@ -17,7 +18,9 @@ from .ypipe_fabric import YpipeFabric
 console = Console()
 
 
-def _safe_health(factory) -> FabricHealth:
+def _safe_health(name: str, factory) -> FabricHealth:
+    if not fabric_enabled(name):
+        return FabricHealth(status="DISABLED", ready=False, detail="Disabled by Everstate setup policy.")
     try:
         return factory().health()
     except (ValueError, OSError, RuntimeError) as exc:
@@ -28,20 +31,21 @@ def register(app: typer.Typer, service_factory) -> None:
     @app.command("fabric-route")
     def fabric_route(
         path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
-        mode: SovereigntyMode = typer.Option(SovereigntyMode.AUTO, "--mode"),
+        mode: SovereigntyMode | None = typer.Option(None, "--mode", help="Override the saved setup policy for this run."),
         json_output: bool = typer.Option(False, "--json"),
     ) -> None:
-        """Choose Ypipe, FreeLLMAPI, or OmniRoute from canonical constraints and live health."""
+        """Choose Ypipe, FreeLLMAPI, or OmniRoute from saved policy, canonical constraints, and live health."""
         service: EverstateService = service_factory()
         state = service.status(path)
+        effective_mode = mode or SovereigntyMode(configured_policy())
 
-        ypipe_health = _safe_health(YpipeFabric)
-        free_health = _safe_health(FreeLLMAPIFabric)
-        omniroute_health = _safe_health(OmniRouteFabric)
+        ypipe_health = _safe_health("ypipe", YpipeFabric)
+        free_health = _safe_health("freellmapi", FreeLLMAPIFabric)
+        omniroute_health = _safe_health("omniroute", OmniRouteFabric)
 
         decision = choose_execution_fabric(
             constraints=state.active_constraints,
-            mode=mode,
+            mode=effective_mode,
             ypipe_health=ypipe_health,
             freellmapi_health=free_health,
             omniroute_health=omniroute_health,
@@ -49,7 +53,8 @@ def register(app: typer.Typer, service_factory) -> None:
         report = {
             "project_id": state.project_id,
             "state_version": state.version,
-            "mode": mode.value,
+            "mode": effective_mode.value,
+            "mode_source": "override" if mode is not None else "setup",
             "constraints": list(state.active_constraints),
             "local_required": decision.local_required,
             "selected": decision.selected,
@@ -62,16 +67,10 @@ def register(app: typer.Typer, service_factory) -> None:
         if json_output:
             console.print_json(json.dumps(report))
         else:
-            console.print(
-                Panel.fit(
-                    f"Project: {state.project_id}\n"
-                    f"State version: {state.version}\n"
-                    f"Mode: {mode.value}\n"
-                    f"Local required: {decision.local_required}\n"
-                    f"Selected: {decision.selected or 'NONE'}\n"
-                    f"Reason: {decision.reason}",
-                    title="Everstate execution fabric routing",
-                )
-            )
+            console.print(Panel.fit(
+                f"Project: {state.project_id}\nState version: {state.version}\nMode: {effective_mode.value}\n"
+                f"Local required: {decision.local_required}\nSelected: {decision.selected or 'NONE'}\nReason: {decision.reason}",
+                title="Everstate execution fabric routing",
+            ))
         if decision.selected is None:
             raise typer.Exit(code=2)
