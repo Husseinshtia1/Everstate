@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable
 from urllib.parse import urljoin, urlparse
 
+from .execution_config import configured_value
 from .provider_fabric import FabricHealth, FabricResponse, FabricTarget
 
 
@@ -43,7 +44,7 @@ class YpipeConfig:
             "on",
         }
         return cls(
-            base_url=os.environ.get("EVERSTATE_YPIPE_URL", cls.base_url),
+            base_url=configured_value("EVERSTATE_YPIPE_URL", "ypipe_url", cls.base_url) or cls.base_url,
             api_key=os.environ.get("EVERSTATE_YPIPE_API_KEY"),
             timeout=timeout,
             allow_remote=allow_remote,
@@ -105,14 +106,17 @@ class YpipeFabric:
             body = json.dumps(payload).encode("utf-8")
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
+
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             response = self._opener(request, timeout=timeout or self.config.timeout)
             raw = response.read()
         except urllib.error.HTTPError as exc:
-            raise YpipeError(f"Ypipe returned HTTP {exc.code}") from exc
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise YpipeError(f"Ypipe HTTP {exc.code}: {detail or exc.reason}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise YpipeError(f"Ypipe request failed: {exc}") from exc
+
         try:
             decoded = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -120,23 +124,6 @@ class YpipeFabric:
         if not isinstance(decoded, dict):
             raise YpipeError("Ypipe returned a non-object JSON response")
         return decoded
-
-    def health(self) -> FabricHealth:
-        try:
-            targets = self.discover_targets()
-        except YpipeError as exc:
-            return FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
-        if not targets:
-            return FabricHealth(
-                status="DEGRADED",
-                ready=False,
-                detail="Ypipe is reachable but reported no local models.",
-            )
-        return FabricHealth(
-            status="READY",
-            ready=True,
-            detail=f"Ypipe is reachable with {len(targets)} local model target(s).",
-        )
 
     def discover_targets(self) -> tuple[FabricTarget, ...]:
         payload = self._request_json("GET", f"{self._base_url}/models")
@@ -150,22 +137,18 @@ class YpipeFabric:
             model_id = row.get("id")
             if not isinstance(model_id, str) or not model_id.strip():
                 continue
-            owned_by = row.get("owned_by") if isinstance(row.get("owned_by"), str) else "ypipe-local"
-            targets.append(FabricTarget(id=model_id, provider=owned_by, model=model_id))
+            provider = row.get("owned_by") if isinstance(row.get("owned_by"), str) else None
+            targets.append(FabricTarget(id=model_id, provider=provider, model=model_id))
         return tuple(targets)
 
-    def selected_model(self) -> str | None:
-        return self.config.model
-
-    def resolve_model(self) -> str:
-        targets = self.discover_targets()
-        if self.config.model:
-            if self.config.model not in {target.id for target in targets}:
-                raise YpipeError(f"Configured Ypipe model {self.config.model!r} is not in the live model catalog")
-            return self.config.model
+    def health(self) -> FabricHealth:
+        try:
+            targets = self.discover_targets()
+        except YpipeError as exc:
+            return FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
         if not targets:
-            raise YpipeError("Ypipe reported no local models")
-        return targets[0].id
+            return FabricHealth(status="DEGRADED", ready=False, detail="Ypipe is reachable but reported no local models.")
+        return FabricHealth(status="READY", ready=True, detail=f"Ypipe is reachable with {len(targets)} local model target(s).")
 
     def execute(
         self,
@@ -198,110 +181,107 @@ class YpipeFabric:
     def run_smartpipe(
         self,
         endpoint: str,
-        payload: dict,
         *,
+        payload: dict,
         timeout: float | None = None,
     ) -> dict:
-        """Invoke a SmartPipe that Ypipe has explicitly published as a REST endpoint.
-
-        `endpoint` may be a path relative to the Ypipe server origin or an absolute
-        URL. Remote absolute URLs remain forbidden unless allow_remote is enabled.
-        """
         if not endpoint.strip():
             raise ValueError("SmartPipe endpoint must not be empty")
-        if endpoint.startswith(("http://", "https://")):
-            target_url = endpoint
-        else:
-            base = self._base_url
-            parsed = urlparse(base)
-            origin = f"{parsed.scheme}://{parsed.netloc}/"
-            target_url = urljoin(origin, endpoint.lstrip("/"))
-        parsed_target = urlparse(target_url)
-        if not self.config.allow_remote and not _is_loopback_host(parsed_target.hostname):
-            raise ValueError("SmartPipe endpoint must stay local unless remote Ypipe is explicitly allowed")
-        return self._request_json("POST", target_url, payload=payload, timeout=timeout)
+        url = urljoin(f"{self._base_url}/", endpoint.lstrip("/"))
+        return self._request_json("POST", url, payload=payload, timeout=timeout)
+
+    def resolve_model(self, requested: str | None = None) -> str:
+        configured = requested or self.config.model
+        targets = self.discover_targets()
+        if configured:
+            if configured not in {target.id for target in targets}:
+                raise YpipeError(f"Configured Ypipe model {configured!r} is not in the live model catalog")
+            return configured
+        if not targets:
+            raise YpipeError("Ypipe reported no local models")
+        return targets[0].id
 
 
 class YpipeMcpClient:
-    """Minimal MCP Streamable HTTP client for Ypipe-managed MCP integrations.
-
-    Supports JSON responses and the common SSE `data:` envelope returned by
-    Streamable HTTP servers. It intentionally exposes only initialize, tools/list,
-    and tools/call required by Everstate's integration boundary.
-    """
+    """Minimal MCP-over-HTTP client for Ypipe public MCP surfaces."""
 
     def __init__(
         self,
         url: str,
         *,
         timeout: float = 5.0,
-        opener: Callable[..., object] = urllib.request.urlopen,
         allow_remote: bool = False,
+        opener: Callable[..., object] = urllib.request.urlopen,
     ) -> None:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("MCP URL must be an absolute http(s) URL")
+            raise ValueError("Ypipe MCP URL must be an absolute http(s) URL")
         if not allow_remote and not _is_loopback_host(parsed.hostname):
-            raise ValueError("Ypipe MCP endpoint must be local unless explicitly allowed")
+            raise ValueError("Ypipe MCP is local-only unless remote access is explicitly enabled")
         self.url = url
         self.timeout = timeout
         self._opener = opener
-        self._next_id = 1
+        self._request_id = 0
+        self._session_id: str | None = None
 
     def _rpc(self, method: str, params: dict | None = None) -> dict:
-        request_id = self._next_id
-        self._next_id += 1
+        self._request_id += 1
+        request_id = self._request_id
         payload = {"jsonrpc": "2.0", "id": request_id, "method": method}
         if params is not None:
             payload["params"] = params
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
         request = urllib.request.Request(
             self.url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-            },
+            headers=headers,
             method="POST",
         )
         try:
             response = self._opener(request, timeout=self.timeout)
-            text = response.read().decode("utf-8")
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, UnicodeDecodeError) as exc:
+            session_id = response.headers.get("Mcp-Session-Id") if hasattr(response, "headers") else None
+            if session_id:
+                self._session_id = session_id
+            raw = response.read().decode("utf-8")
+            content_type = response.headers.get("Content-Type", "") if hasattr(response, "headers") else ""
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise YpipeError(f"Ypipe MCP request failed: {exc}") from exc
 
-        candidates: Iterable[str]
-        stripped = text.strip()
-        if stripped.startswith("{"):
-            candidates = (stripped,)
-        else:
-            candidates = (
-                line[5:].strip()
-                for line in stripped.splitlines()
-                if line.startswith("data:") and line[5:].strip() and line[5:].strip() != "[DONE]"
-            )
-        decoded: dict | None = None
-        for candidate in candidates:
-            try:
-                value = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict) and value.get("id") == request_id:
-                decoded = value
-                break
-        if decoded is None:
-            raise YpipeError("Ypipe MCP returned no matching JSON-RPC response")
-        if "error" in decoded:
-            raise YpipeError(f"Ypipe MCP error: {decoded['error']}")
-        result = decoded.get("result")
+        envelope = self._decode_mcp_envelope(raw, content_type)
+        if envelope.get("id") != request_id:
+            raise YpipeError("Ypipe MCP response id does not match request id")
+        if envelope.get("error"):
+            raise YpipeError(f"Ypipe MCP error: {envelope['error']}")
+        result = envelope.get("result")
         if not isinstance(result, dict):
-            raise YpipeError("Ypipe MCP response is missing an object result")
+            raise YpipeError("Ypipe MCP response is missing a result object")
         return result
+
+    @staticmethod
+    def _decode_mcp_envelope(raw: str, content_type: str) -> dict:
+        if "text/event-stream" in content_type:
+            data_lines = [line[5:].strip() for line in raw.splitlines() if line.startswith("data:")]
+            if not data_lines:
+                raise YpipeError("Ypipe MCP SSE response contains no data event")
+            raw = data_lines[-1]
+        try:
+            envelope = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise YpipeError("Ypipe MCP returned invalid JSON") from exc
+        if not isinstance(envelope, dict):
+            raise YpipeError("Ypipe MCP returned a non-object response")
+        return envelope
 
     def initialize(self) -> dict:
         return self._rpc(
             "initialize",
             {
-                "protocolVersion": "2025-11-25",
+                "protocolVersion": "2025-03-26",
                 "capabilities": {},
                 "clientInfo": {"name": "everstate", "version": "0.1"},
             },
@@ -316,5 +296,5 @@ class YpipeMcpClient:
 
     def call_tool(self, name: str, arguments: dict | None = None) -> dict:
         if not name.strip():
-            raise ValueError("MCP tool name must not be empty")
+            raise ValueError("tool name must not be empty")
         return self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
