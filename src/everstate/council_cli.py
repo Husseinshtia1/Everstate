@@ -45,7 +45,7 @@ def _roles(value: str) -> tuple[str, ...]:
 
 def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
     local_only = constraints_require_local(packet.constraints)
-    candidates = []
+    candidate_groups: list[tuple[object, tuple[str, ...]]] = []
     health_report = {}
 
     factories = (("ypipe", YpipeFabric),)
@@ -60,9 +60,8 @@ def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
             "detail": health.detail,
             "targets": [target.id for target in targets],
         }
-        if fabric is not None and health.ready:
-            for target in targets:
-                candidates.append((fabric, target.id))
+        if fabric is not None and health.ready and targets:
+            candidate_groups.append((fabric, tuple(target.id for target in targets)))
 
     if local_only:
         health_report["freellmapi"] = {
@@ -78,9 +77,24 @@ def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
             "targets": [],
         }
 
-    if not candidates:
+    if not candidate_groups:
         reason = "No eligible local council participant is ready." if local_only else "No enabled council execution target is ready."
         raise CouncilError(reason)
+
+    # Diversity-first selection: take one model from every ready fabric before
+    # taking a second model from any one fabric. This makes independent review
+    # more likely while still allowing a local-only council to use several Ypipe models.
+    candidates: list[tuple[object, str]] = []
+    depth = 0
+    while True:
+        added = False
+        for fabric, models in candidate_groups:
+            if depth < len(models):
+                candidates.append((fabric, models[depth]))
+                added = True
+        if not added:
+            break
+        depth += 1
 
     limit = min(max_agents, len(roles))
     participants = []
