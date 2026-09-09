@@ -26,7 +26,10 @@ def _run_git(root: Path, *args: str, check: bool = True) -> str:
     )
     if check and proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "git command failed")
-    return proc.stdout.strip()
+    # Do not use .strip(): porcelain status intentionally uses a leading space
+    # as one of its two status columns (for example " M file.txt"). Removing
+    # that byte shifts the path and silently drops its first character.
+    return proc.stdout.rstrip("\r\n")
 
 
 def ensure_git_repo(root: Path) -> None:
@@ -91,14 +94,7 @@ def snapshot(root: Path) -> GitSnapshot:
 
 def snapshot_event(project_id: str, root: Path) -> Event:
     snap = snapshot(root)
-    canonical = "\n".join(
-        [
-            snap.branch,
-            snap.head or "",
-            snap.status_porcelain,
-            snap.diff_stat,
-        ]
-    )
+    canonical = "\n".join([snap.branch, snap.head or "", snap.status_porcelain, snap.diff_stat])
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     return Event(
