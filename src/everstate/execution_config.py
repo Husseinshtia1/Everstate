@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
@@ -55,3 +55,20 @@ def configured_value(env_name: str, setting_name: str, default: str | None = Non
     settings = load_execution_settings()
     configured = getattr(settings, setting_name, default)
     return configured if isinstance(configured, str) or configured is None else default
+
+
+def fabric_enabled(name: str) -> bool:
+    settings = load_execution_settings()
+    mapping = {
+        "ypipe": settings.ypipe_enabled,
+        "freellmapi": settings.freellmapi_enabled,
+        "omniroute": settings.omniroute_enabled,
+    }
+    if name not in mapping:
+        raise KeyError(name)
+    return bool(mapping[name])
+
+
+def configured_policy() -> str:
+    value = load_execution_settings().policy.strip().lower()
+    return value if value in {"auto", "local-only", "cloud-allowed", "cloud-preferred"} else "auto"
