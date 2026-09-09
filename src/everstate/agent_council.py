@@ -296,6 +296,14 @@ def _parallel_round(
     return tuple(results), tuple(failures)
 
 
+def _quorum_error(round_number: int, succeeded: int, quorum: int, failures: tuple[CouncilFailure, ...]) -> CouncilError:
+    detail = "; ".join(f"{failure.participant_id}: {failure.error}" for failure in failures)
+    suffix = f"; failures: {detail}" if detail else ""
+    return CouncilError(
+        f"AgentCouncil quorum not met in round {round_number}: {succeeded}/{quorum} successful{suffix}"
+    )
+
+
 def _synthesize(opinions: tuple[CouncilOpinion, ...]) -> tuple[str, tuple[str, ...], float, float]:
     if not opinions:
         return "NO_OPINIONS", (), 0.0, 0.0
@@ -359,7 +367,7 @@ def execute_agent_council(
 
     first, first_failures = _parallel_round(participant_tuple, packet, clean_question, 1, ())
     if len(first) < quorum:
-        raise CouncilError(f"AgentCouncil quorum not met in round 1: {len(first)}/{quorum} successful")
+        raise _quorum_error(1, len(first), quorum, first_failures)
     all_opinions = list(first)
     all_failures = list(first_failures)
     if mode is CouncilMode.DEBATE:
@@ -368,9 +376,7 @@ def execute_agent_council(
             current, failures = _parallel_round(participant_tuple, packet, clean_question, round_number, prior)
             all_failures.extend(failures)
             if len(current) < quorum:
-                raise CouncilError(
-                    f"AgentCouncil quorum not met in round {round_number}: {len(current)}/{quorum} successful"
-                )
+                raise _quorum_error(round_number, len(current), quorum, failures)
             all_opinions.extend(current)
             prior = current
 
