@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 
 from everstate.execution_config import (
     ExecutionSettings,
     configured_policy,
     fabric_enabled,
     load_execution_settings,
+    private_file_permissions_enforced,
     save_execution_settings,
 )
 from everstate.fabric_routing import SovereigntyMode, choose_execution_fabric
@@ -36,7 +36,7 @@ def test_execution_settings_round_trip_with_private_permissions(monkeypatch, tmp
     assert fabric_enabled("ypipe") is True
     assert fabric_enabled("freellmapi") is False
     assert fabric_enabled("omniroute") is False
-    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert private_file_permissions_enforced(path) is True
 
 
 def test_auto_prefers_free_remote_before_omniroute_when_local_is_down() -> None:
