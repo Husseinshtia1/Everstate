@@ -4,7 +4,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from .models import Event, ProjectState
 
@@ -130,19 +130,8 @@ class LocalStore:
                 (project_id, limit),
             ).fetchall()
 
-    def latest_state(self, project_id: str) -> ProjectState | None:
-        # State versions are immutable snapshots. If an interrupted/manual
-        # filesystem operation corrupts the newest JSON row, fall back to the
-        # newest earlier valid snapshot without deleting forensic evidence.
-        with self.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT state_json FROM state_versions
-                WHERE project_id = ?
-                ORDER BY version DESC
-                """,
-                (project_id,),
-            ).fetchall()
+    @staticmethod
+    def _latest_valid_state_from_rows(rows: list[sqlite3.Row]) -> ProjectState | None:
         for row in rows:
             try:
                 return ProjectState.model_validate_json(row["state_json"])
@@ -150,16 +139,60 @@ class LocalStore:
                 continue
         return None
 
+    def latest_state(self, project_id: str) -> ProjectState | None:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT version, state_json FROM state_versions
+                WHERE project_id = ?
+                ORDER BY version DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        return self._latest_valid_state_from_rows(rows)
+
     def next_state_version(self, project_id: str) -> int:
-        # Version allocation must consider corrupt rows too. Otherwise recovery
-        # from a corrupt newest snapshot would repeatedly collide with that
-        # already-reserved version number.
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT COALESCE(MAX(version), 0) AS max_version FROM state_versions WHERE project_id = ?",
                 (project_id,),
             ).fetchone()
         return int(row["max_version"]) + 1
+
+    def mutate_state(
+        self,
+        project_id: str,
+        mutation: Callable[[ProjectState | None, int], ProjectState],
+    ) -> ProjectState:
+        # BEGIN IMMEDIATE serializes writers before we read the previous state.
+        # The read, version allocation, mutation and insert therefore describe
+        # one atomic transition and cannot overwrite a concurrent writer using
+        # a stale predecessor snapshot.
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT version, state_json FROM state_versions
+                WHERE project_id = ?
+                ORDER BY version DESC
+                """,
+                (project_id,),
+            ).fetchall()
+            current = self._latest_valid_state_from_rows(rows)
+            next_version = (int(rows[0]["version"]) if rows else 0) + 1
+            state = mutation(current, next_version)
+            if state.project_id != project_id:
+                raise ValueError("State mutation changed project identity")
+            if state.version != next_version:
+                raise ValueError("State mutation did not use allocated version")
+            conn.execute(
+                """
+                INSERT INTO state_versions(project_id, version, state_json)
+                VALUES (?, ?, ?)
+                """,
+                (state.project_id, state.version, state.model_dump_json()),
+            )
+            return state
 
     def save_state(self, state: ProjectState) -> None:
         with self.connect() as conn:
