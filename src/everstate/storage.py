@@ -57,8 +57,14 @@ class LocalStore:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
+        # A real workstation can have multiple Everstate processes touching the
+        # same local store (CLI, editor integration, agent runner).  Give WAL
+        # writers enough time to serialize rather than failing immediately with
+        # "database is locked" under ordinary contention.
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=30000")
         try:
             yield conn
             conn.commit()
@@ -125,19 +131,25 @@ class LocalStore:
             ).fetchall()
 
     def latest_state(self, project_id: str) -> ProjectState | None:
+        # State versions are immutable snapshots.  If an interrupted/manual
+        # filesystem operation corrupts the newest JSON row, fall back to the
+        # newest earlier valid snapshot instead of making the project
+        # unreadable.  We intentionally do not mutate/delete evidence here.
         with self.connect() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """
                 SELECT state_json FROM state_versions
                 WHERE project_id = ?
                 ORDER BY version DESC
-                LIMIT 1
                 """,
                 (project_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return ProjectState.model_validate_json(row["state_json"])
+            ).fetchall()
+        for row in rows:
+            try:
+                return ProjectState.model_validate_json(row["state_json"])
+            except (ValueError, TypeError):
+                continue
+        return None
 
     def save_state(self, state: ProjectState) -> None:
         with self.connect() as conn:
