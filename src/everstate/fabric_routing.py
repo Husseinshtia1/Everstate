@@ -19,6 +19,7 @@ class FabricRoutingDecision:
     reason: str
     local_required: bool
     ypipe_ready: bool
+    freellmapi_ready: bool
     omniroute_ready: bool
 
 
@@ -43,56 +44,48 @@ def choose_execution_fabric(
     constraints: list[str] | tuple[str, ...] = (),
     mode: SovereigntyMode = SovereigntyMode.AUTO,
     ypipe_health: FabricHealth | None = None,
+    freellmapi_health: FabricHealth | None = None,
     omniroute_health: FabricHealth | None = None,
 ) -> FabricRoutingDecision:
     ypipe_ready = bool(ypipe_health and ypipe_health.ready)
+    freellmapi_ready = bool(freellmapi_health and freellmapi_health.ready)
     omniroute_ready = bool(omniroute_health and omniroute_health.ready)
     local_required = mode is SovereigntyMode.LOCAL_ONLY or constraints_require_local(constraints)
 
+    def result(selected: str | None, reason: str, *, local: bool = False) -> FabricRoutingDecision:
+        return FabricRoutingDecision(
+            selected=selected,
+            reason=reason,
+            local_required=local,
+            ypipe_ready=ypipe_ready,
+            freellmapi_ready=freellmapi_ready,
+            omniroute_ready=omniroute_ready,
+        )
+
     if local_required:
         if ypipe_ready:
-            return FabricRoutingDecision(
-                selected="ypipe",
-                reason="Canonical constraints require local execution and Ypipe is ready.",
-                local_required=True,
-                ypipe_ready=ypipe_ready,
-                omniroute_ready=omniroute_ready,
-            )
-        return FabricRoutingDecision(
-            selected=None,
-            reason="Canonical constraints require local execution, but Ypipe is not ready; cloud fallback is forbidden.",
-            local_required=True,
-            ypipe_ready=ypipe_ready,
-            omniroute_ready=omniroute_ready,
+            return result("ypipe", "Canonical constraints require local execution and Ypipe is ready.", local=True)
+        return result(
+            None,
+            "Canonical constraints require local execution, but Ypipe is not ready; all remote fallback is forbidden.",
+            local=True,
         )
 
     if mode is SovereigntyMode.CLOUD_PREFERRED:
         if omniroute_ready:
-            selected = "omniroute"
-            reason = "Cloud-preferred mode selected a ready OmniRoute fabric."
-        elif ypipe_ready:
-            selected = "ypipe"
-            reason = "Cloud-preferred mode fell back to ready local Ypipe because OmniRoute is unavailable."
-        else:
-            selected = None
-            reason = "No execution fabric is ready."
-    else:
-        # AUTO and CLOUD_ALLOWED intentionally prefer local execution when it is
-        # available, preserving privacy/cost without forbidding cloud fallback.
+            return result("omniroute", "Cloud-preferred mode selected a ready OmniRoute fabric.")
+        if freellmapi_ready:
+            return result("freellmapi", "OmniRoute is unavailable; free remote capacity selected before local fallback.")
         if ypipe_ready:
-            selected = "ypipe"
-            reason = "Ready local Ypipe preferred for privacy and provider independence."
-        elif omniroute_ready:
-            selected = "omniroute"
-            reason = "Ypipe is unavailable; ready OmniRoute selected as allowed fallback."
-        else:
-            selected = None
-            reason = "No execution fabric is ready."
+            return result("ypipe", "Remote fabrics are unavailable; cloud-preferred mode fell back to local Ypipe.")
+        return result(None, "No execution fabric is ready.")
 
-    return FabricRoutingDecision(
-        selected=selected,
-        reason=reason,
-        local_required=False,
-        ypipe_ready=ypipe_ready,
-        omniroute_ready=omniroute_ready,
-    )
+    # AUTO/CLOUD_ALLOWED minimize data egress and cost: local first, then free
+    # remote capacity, then general cloud routing.
+    if ypipe_ready:
+        return result("ypipe", "Ready local Ypipe preferred for privacy and provider independence.")
+    if freellmapi_ready:
+        return result("freellmapi", "Ypipe is unavailable; ready FreeLLMAPI selected as free remote capacity.")
+    if omniroute_ready:
+        return result("omniroute", "Local and free fabrics are unavailable; ready OmniRoute selected as fallback.")
+    return result(None, "No execution fabric is ready.")
