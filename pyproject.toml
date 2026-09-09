@@ -23,6 +23,10 @@ dev = [
   "pytest>=8.2,<9",
   "pytest-cov>=5,<6"
 ]
+council = [
+  "google-adk>=2,<3",
+  "argus-debate-ai>=5,<6"
+]
 
 [project.scripts]
 everstate = "everstate.cli_runtime:app"
