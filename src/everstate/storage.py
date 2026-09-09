@@ -4,7 +4,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 from .models import Event, ProjectState
 
@@ -57,8 +57,10 @@ class LocalStore:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=30000")
         try:
             yield conn
             conn.commit()
@@ -82,6 +84,10 @@ class LocalStore:
                 """,
                 (project_id, name, str(root_path.resolve())),
             )
+
+    def get_project(self, project_id: str) -> sqlite3.Row | None:
+        with self.connect() as conn:
+            return conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
 
     def get_project_by_root(self, root_path: Path) -> sqlite3.Row | None:
         with self.connect() as conn:
@@ -124,20 +130,69 @@ class LocalStore:
                 (project_id, limit),
             ).fetchall()
 
+    @staticmethod
+    def _latest_valid_state_from_rows(rows: list[sqlite3.Row]) -> ProjectState | None:
+        for row in rows:
+            try:
+                return ProjectState.model_validate_json(row["state_json"])
+            except (ValueError, TypeError):
+                continue
+        return None
+
     def latest_state(self, project_id: str) -> ProjectState | None:
         with self.connect() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT state_json FROM state_versions
+                SELECT version, state_json FROM state_versions
                 WHERE project_id = ?
                 ORDER BY version DESC
-                LIMIT 1
                 """,
                 (project_id,),
+            ).fetchall()
+        return self._latest_valid_state_from_rows(rows)
+
+    def next_state_version(self, project_id: str) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) AS max_version FROM state_versions WHERE project_id = ?",
+                (project_id,),
             ).fetchone()
-        if row is None:
-            return None
-        return ProjectState.model_validate_json(row["state_json"])
+        return int(row["max_version"]) + 1
+
+    def mutate_state(
+        self,
+        project_id: str,
+        mutation: Callable[[ProjectState | None, int], ProjectState],
+    ) -> ProjectState:
+        # BEGIN IMMEDIATE serializes writers before we read the previous state.
+        # The read, version allocation, mutation and insert therefore describe
+        # one atomic transition and cannot overwrite a concurrent writer using
+        # a stale predecessor snapshot.
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT version, state_json FROM state_versions
+                WHERE project_id = ?
+                ORDER BY version DESC
+                """,
+                (project_id,),
+            ).fetchall()
+            current = self._latest_valid_state_from_rows(rows)
+            next_version = (int(rows[0]["version"]) if rows else 0) + 1
+            state = mutation(current, next_version)
+            if state.project_id != project_id:
+                raise ValueError("State mutation changed project identity")
+            if state.version != next_version:
+                raise ValueError("State mutation did not use allocated version")
+            conn.execute(
+                """
+                INSERT INTO state_versions(project_id, version, state_json)
+                VALUES (?, ?, ?)
+                """,
+                (state.project_id, state.version, state.model_dump_json()),
+            )
+            return state
 
     def save_state(self, state: ProjectState) -> None:
         with self.connect() as conn:

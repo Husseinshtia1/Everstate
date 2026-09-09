@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from .continuity import ContinuationPacket
@@ -9,25 +10,96 @@ from .models import Event, ProjectState
 from .storage import LocalStore
 
 
+_IDENTITY_MARKER = Path(".everstate") / "project.json"
+
+
 def stable_project_id(root: Path) -> str:
     digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
     return f"proj_{digest}"
+
+
+def _identity_marker_path(root: Path) -> Path:
+    return root / _IDENTITY_MARKER
+
+
+def _read_identity_marker(root: Path) -> str | None:
+    path = _identity_marker_path(root)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    project_id = raw.get("project_id")
+    if not isinstance(project_id, str):
+        return None
+    project_id = project_id.strip()
+    if not project_id.startswith("proj_") or len(project_id) > 128:
+        return None
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in project_id):
+        return None
+    return project_id
+
+
+def _write_identity_marker(root: Path, project_id: str) -> None:
+    path = _identity_marker_path(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"version": 1, "project_id": project_id}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except OSError:
+        return
 
 
 class EverstateService:
     def __init__(self, store: LocalStore):
         self.store = store
 
+    def _project_id_for_root(self, root: Path) -> str:
+        marker_id = _read_identity_marker(root)
+        if marker_id is None:
+            return stable_project_id(root)
+        existing = self.store.get_project(marker_id)
+        if existing is None:
+            return marker_id
+        existing_root = Path(existing["root_path"])
+        if existing_root.resolve() == root.resolve():
+            return marker_id
+        if not existing_root.exists():
+            return marker_id
+        return stable_project_id(root)
+
+    @staticmethod
+    def _carry_state(current: ProjectState | None, project_id: str, version: int) -> ProjectState:
+        if current is None:
+            return ProjectState(project_id=project_id, version=version)
+        return ProjectState(
+            project_id=project_id,
+            version=version,
+            objective=current.objective,
+            current_task=current.current_task,
+            active_constraints=list(current.active_constraints),
+            decisions=list(current.decisions),
+            failed_attempts=list(current.failed_attempts),
+            blockers=list(current.blockers),
+            modified_files=list(current.modified_files),
+            next_action=current.next_action,
+            unresolved_conflicts=list(current.unresolved_conflicts),
+        )
+
     def init_project(self, root: Path) -> str:
         root = root.resolve()
-        project_id = stable_project_id(root)
+        project_id = self._project_id_for_root(root)
         self.store.upsert_project(project_id, root.name, root)
+        _write_identity_marker(root, project_id)
 
         try:
             event = snapshot_event(project_id, root)
         except RuntimeError:
-            # Everstate projects do not require Git. A non-Git workspace starts
-            # with a canonical state but without Git-derived file evidence.
             if self.store.latest_state(project_id) is None:
                 event = Event(
                     project_id=project_id,
@@ -38,7 +110,10 @@ class EverstateService:
                     payload={"root": str(root), "git_backed": False},
                 )
                 self.store.append_event(event)
-                self.store.save_state(ProjectState(project_id=project_id, version=1))
+                self.store.mutate_state(
+                    project_id,
+                    lambda current, version: self._carry_state(current, project_id, version),
+                )
             return project_id
 
         self.store.append_event(event)
@@ -63,15 +138,13 @@ class EverstateService:
             latest = self.store.latest_state(project_id)
             if latest is not None:
                 return latest
-            state = ProjectState(project_id=project_id, version=1)
-            self.store.save_state(state)
-            return state
+            return self.store.mutate_state(
+                project_id,
+                lambda current, version: self._carry_state(current, project_id, version),
+            )
 
         recent_events = self.store.list_events(project_id, limit=200)
-        latest_git_event = next(
-            (row for row in recent_events if row["event_type"] == "git_snapshot"),
-            None,
-        )
+        latest_git_event = next((row for row in recent_events if row["event_type"] == "git_snapshot"), None)
         if latest_git_event is None or latest_git_event["content_hash"] != event.content_hash:
             self.store.append_event(event)
             return self._materialize_git_state(project_id, event.payload)
@@ -81,46 +154,41 @@ class EverstateService:
         return latest
 
     def _materialize_git_state(self, project_id: str, payload: dict) -> ProjectState:
-        previous = self.store.latest_state(project_id)
-        version = 1 if previous is None else previous.version + 1
         modified_files = list(payload.get("modified_files") or [])
-        state = ProjectState(
-            project_id=project_id,
-            version=version,
-            objective=previous.objective if previous else None,
-            current_task=previous.current_task if previous else None,
-            active_constraints=list(previous.active_constraints) if previous else [],
-            decisions=list(previous.decisions) if previous else [],
-            failed_attempts=list(previous.failed_attempts) if previous else [],
-            blockers=list(previous.blockers) if previous else [],
-            modified_files=modified_files,
-            next_action=previous.next_action if previous else None,
-            unresolved_conflicts=list(previous.unresolved_conflicts) if previous else [],
-        )
-        self.store.save_state(state)
-        return state
 
-    def _record_state_event(self, root: Path, event_type: str, payload: dict) -> ProjectState:
-        root, project_id = self._ensure_project(root)
-        current = self.refresh_project(root)
-        event = Event(
-            project_id=project_id,
-            event_type=event_type,
-            source_type="explicit_user_input",
-            source_locator=str(root),
-            actor="user",
-            payload=payload,
-        )
-        self.store.append_event(event)
+        def mutation(previous: ProjectState | None, version: int) -> ProjectState:
+            return ProjectState(
+                project_id=project_id,
+                version=version,
+                objective=previous.objective if previous else None,
+                current_task=previous.current_task if previous else None,
+                active_constraints=list(previous.active_constraints) if previous else [],
+                decisions=list(previous.decisions) if previous else [],
+                failed_attempts=list(previous.failed_attempts) if previous else [],
+                blockers=list(previous.blockers) if previous else [],
+                modified_files=modified_files,
+                next_action=previous.next_action if previous else None,
+                unresolved_conflicts=list(previous.unresolved_conflicts) if previous else [],
+            )
 
-        objective = current.objective
-        current_task = current.current_task
-        constraints = list(current.active_constraints)
-        decisions = list(current.decisions)
-        failures = list(current.failed_attempts)
-        blockers = list(current.blockers)
-        next_action = current.next_action
+        return self.store.mutate_state(project_id, mutation)
 
+    @staticmethod
+    def _state_with_event(
+        current: ProjectState | None,
+        project_id: str,
+        event_type: str,
+        payload: dict,
+        *,
+        version: int,
+    ) -> ProjectState:
+        objective = current.objective if current else None
+        current_task = current.current_task if current else None
+        constraints = list(current.active_constraints) if current else []
+        decisions = list(current.decisions) if current else []
+        failures = list(current.failed_attempts) if current else []
+        blockers = list(current.blockers) if current else []
+        next_action = current.next_action if current else None
         value = str(payload.get("value", "")).strip()
         if event_type == "objective_set":
             objective = value
@@ -136,33 +204,42 @@ class EverstateService:
             blockers.append(value)
         elif event_type == "next_action_set":
             next_action = value
-        else:
-            if event_type not in {
-                "objective_set",
-                "task_set",
-                "decision_added",
-                "constraint_added",
-                "failure_added",
-                "blocker_added",
-                "next_action_set",
-            }:
-                raise ValueError(f"Unsupported state event: {event_type}")
-
-        state = ProjectState(
+        elif event_type not in {
+            "objective_set", "task_set", "decision_added", "constraint_added",
+            "failure_added", "blocker_added", "next_action_set",
+        }:
+            raise ValueError(f"Unsupported state event: {event_type}")
+        return ProjectState(
             project_id=project_id,
-            version=current.version + 1,
+            version=version,
             objective=objective,
             current_task=current_task,
             active_constraints=constraints,
             decisions=decisions,
             failed_attempts=failures,
             blockers=blockers,
-            modified_files=list(current.modified_files),
+            modified_files=list(current.modified_files) if current else [],
             next_action=next_action,
-            unresolved_conflicts=list(current.unresolved_conflicts),
+            unresolved_conflicts=list(current.unresolved_conflicts) if current else [],
         )
-        self.store.save_state(state)
-        return state
+
+    def _record_state_event(self, root: Path, event_type: str, payload: dict) -> ProjectState:
+        root, project_id = self._ensure_project(root)
+        event = Event(
+            project_id=project_id,
+            event_type=event_type,
+            source_type="explicit_user_input",
+            source_locator=str(root),
+            actor="user",
+            payload=payload,
+        )
+        self.store.append_event(event)
+        return self.store.mutate_state(
+            project_id,
+            lambda current, version: self._state_with_event(
+                current, project_id, event_type, payload, version=version,
+            ),
+        )
 
     def set_objective(self, root: Path, value: str) -> ProjectState:
         return self._record_state_event(root, "objective_set", {"value": value})
@@ -217,7 +294,6 @@ class EverstateService:
             lines.extend(f"- {path}" for path in state.modified_files)
         else:
             lines.append("- Working tree clean or file tracking unavailable")
-
         self._append_section(lines, "Active decisions:", state.decisions, "None captured yet")
         self._append_section(lines, "Active constraints:", state.active_constraints, "None captured yet")
         self._append_section(lines, "Known failed attempts:", state.failed_attempts, "None captured yet")
