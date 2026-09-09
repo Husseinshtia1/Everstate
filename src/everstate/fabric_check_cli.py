@@ -19,7 +19,12 @@ def register(app: typer.Typer) -> None:
     @app.command("fabric-check")
     def fabric_check(
         json_output: bool = typer.Option(False, "--json"),
-        require_all: bool = typer.Option(False, "--require-all", help="Require every enabled fabric to be ready."),
+        require_all: bool = typer.Option(
+            False,
+            "--require-all",
+            "--require-both",
+            help="Require every enabled execution fabric to be ready. --require-both is retained as a compatibility alias.",
+        ),
         active_omniroute: bool = typer.Option(True, "--active-omniroute/--passive-omniroute"),
     ) -> None:
         """Check Ypipe, FreeLLMAPI, and OmniRoute without launching any AI worker."""
