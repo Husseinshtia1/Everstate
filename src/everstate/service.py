@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import sqlite3
 from pathlib import Path
 
 from .continuity import ContinuationPacket
@@ -9,19 +11,85 @@ from .models import Event, ProjectState
 from .storage import LocalStore
 
 
+_IDENTITY_MARKER = Path(".everstate") / "project.json"
+_MAX_STATE_WRITE_RETRIES = 12
+
+
 def stable_project_id(root: Path) -> str:
     digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
     return f"proj_{digest}"
+
+
+def _identity_marker_path(root: Path) -> Path:
+    return root / _IDENTITY_MARKER
+
+
+def _read_identity_marker(root: Path) -> str | None:
+    path = _identity_marker_path(root)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    project_id = raw.get("project_id")
+    if not isinstance(project_id, str):
+        return None
+    project_id = project_id.strip()
+    if not project_id.startswith("proj_") or len(project_id) > 128:
+        return None
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in project_id):
+        return None
+    return project_id
+
+
+def _write_identity_marker(root: Path, project_id: str) -> None:
+    path = _identity_marker_path(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"version": 1, "project_id": project_id}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except OSError:
+        # A read-only workspace must still be usable. Relocation continuity is
+        # unavailable without the marker, but canonical state remains valid.
+        return
 
 
 class EverstateService:
     def __init__(self, store: LocalStore):
         self.store = store
 
+    def _project_id_for_root(self, root: Path) -> str:
+        marker_id = _read_identity_marker(root)
+        if marker_id is None:
+            return stable_project_id(root)
+
+        existing = self.store.get_project(marker_id)
+        if existing is None:
+            # This supports restoring an identity marker together with a store
+            # backup on another machine without deriving identity from a path.
+            return marker_id
+
+        existing_root = Path(existing["root_path"])
+        if existing_root.resolve() == root.resolve():
+            return marker_id
+
+        # Treat the marker as a relocation only when the previous location no
+        # longer exists. If both locations exist, this is a copy/clone and must
+        # not silently hijack or merge the original project's canonical state.
+        if not existing_root.exists():
+            return marker_id
+        return stable_project_id(root)
+
     def init_project(self, root: Path) -> str:
         root = root.resolve()
-        project_id = stable_project_id(root)
+        project_id = self._project_id_for_root(root)
         self.store.upsert_project(project_id, root.name, root)
+        _write_identity_marker(root, project_id)
 
         try:
             event = snapshot_event(project_id, root)
@@ -81,38 +149,33 @@ class EverstateService:
         return latest
 
     def _materialize_git_state(self, project_id: str, payload: dict) -> ProjectState:
-        previous = self.store.latest_state(project_id)
-        version = 1 if previous is None else previous.version + 1
-        modified_files = list(payload.get("modified_files") or [])
-        state = ProjectState(
-            project_id=project_id,
-            version=version,
-            objective=previous.objective if previous else None,
-            current_task=previous.current_task if previous else None,
-            active_constraints=list(previous.active_constraints) if previous else [],
-            decisions=list(previous.decisions) if previous else [],
-            failed_attempts=list(previous.failed_attempts) if previous else [],
-            blockers=list(previous.blockers) if previous else [],
-            modified_files=modified_files,
-            next_action=previous.next_action if previous else None,
-            unresolved_conflicts=list(previous.unresolved_conflicts) if previous else [],
-        )
-        self.store.save_state(state)
-        return state
+        for attempt in range(_MAX_STATE_WRITE_RETRIES):
+            previous = self.store.latest_state(project_id)
+            version = 1 if previous is None else previous.version + 1
+            modified_files = list(payload.get("modified_files") or [])
+            state = ProjectState(
+                project_id=project_id,
+                version=version,
+                objective=previous.objective if previous else None,
+                current_task=previous.current_task if previous else None,
+                active_constraints=list(previous.active_constraints) if previous else [],
+                decisions=list(previous.decisions) if previous else [],
+                failed_attempts=list(previous.failed_attempts) if previous else [],
+                blockers=list(previous.blockers) if previous else [],
+                modified_files=modified_files,
+                next_action=previous.next_action if previous else None,
+                unresolved_conflicts=list(previous.unresolved_conflicts) if previous else [],
+            )
+            try:
+                self.store.save_state(state)
+                return state
+            except sqlite3.IntegrityError:
+                if attempt + 1 >= _MAX_STATE_WRITE_RETRIES:
+                    raise
+        raise RuntimeError("Everstate could not serialize Git state update")
 
-    def _record_state_event(self, root: Path, event_type: str, payload: dict) -> ProjectState:
-        root, project_id = self._ensure_project(root)
-        current = self.refresh_project(root)
-        event = Event(
-            project_id=project_id,
-            event_type=event_type,
-            source_type="explicit_user_input",
-            source_locator=str(root),
-            actor="user",
-            payload=payload,
-        )
-        self.store.append_event(event)
-
+    @staticmethod
+    def _state_with_event(current: ProjectState, event_type: str, payload: dict) -> ProjectState:
         objective = current.objective
         current_task = current.current_task
         constraints = list(current.active_constraints)
@@ -136,20 +199,19 @@ class EverstateService:
             blockers.append(value)
         elif event_type == "next_action_set":
             next_action = value
-        else:
-            if event_type not in {
-                "objective_set",
-                "task_set",
-                "decision_added",
-                "constraint_added",
-                "failure_added",
-                "blocker_added",
-                "next_action_set",
-            }:
-                raise ValueError(f"Unsupported state event: {event_type}")
+        elif event_type not in {
+            "objective_set",
+            "task_set",
+            "decision_added",
+            "constraint_added",
+            "failure_added",
+            "blocker_added",
+            "next_action_set",
+        }:
+            raise ValueError(f"Unsupported state event: {event_type}")
 
-        state = ProjectState(
-            project_id=project_id,
+        return ProjectState(
+            project_id=current.project_id,
             version=current.version + 1,
             objective=objective,
             current_task=current_task,
@@ -161,8 +223,32 @@ class EverstateService:
             next_action=next_action,
             unresolved_conflicts=list(current.unresolved_conflicts),
         )
-        self.store.save_state(state)
-        return state
+
+    def _record_state_event(self, root: Path, event_type: str, payload: dict) -> ProjectState:
+        root, project_id = self._ensure_project(root)
+        event = Event(
+            project_id=project_id,
+            event_type=event_type,
+            source_type="explicit_user_input",
+            source_locator=str(root),
+            actor="user",
+            payload=payload,
+        )
+        self.store.append_event(event)
+
+        # Multiple agents/CLIs can legitimately mutate the same project at
+        # once. Re-read and re-apply the immutable event when another writer
+        # wins the same version number instead of losing one user's update.
+        for attempt in range(_MAX_STATE_WRITE_RETRIES):
+            current = self.refresh_project(root)
+            state = self._state_with_event(current, event_type, payload)
+            try:
+                self.store.save_state(state)
+                return state
+            except sqlite3.IntegrityError:
+                if attempt + 1 >= _MAX_STATE_WRITE_RETRIES:
+                    raise
+        raise RuntimeError("Everstate could not serialize concurrent state update")
 
     def set_objective(self, root: Path, value: str) -> ProjectState:
         return self._record_state_event(root, "objective_set", {"value": value})
