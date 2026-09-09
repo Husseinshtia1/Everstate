@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
+_VALID_POLICIES = {"auto", "local-only", "cloud-allowed", "cloud-preferred"}
+
+
 @dataclass(frozen=True)
 class ExecutionSettings:
     policy: str = "auto"
@@ -23,6 +26,42 @@ def config_path() -> Path:
     return root / ".everstate" / "execution.json"
 
 
+def _string(raw: object, default: str) -> str:
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return default
+
+
+def _optional_string(raw: object, default: str | None) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        value = raw.strip()
+        return value or None
+    return default
+
+
+def _bool(raw: object, default: bool) -> bool:
+    return raw if isinstance(raw, bool) else default
+
+
+def _settings_from_mapping(raw: dict) -> ExecutionSettings:
+    defaults = ExecutionSettings()
+    policy = _string(raw.get("policy"), defaults.policy).lower()
+    if policy not in _VALID_POLICIES:
+        policy = defaults.policy
+    return ExecutionSettings(
+        policy=policy,
+        ypipe_enabled=_bool(raw.get("ypipe_enabled"), defaults.ypipe_enabled),
+        ypipe_url=_string(raw.get("ypipe_url"), defaults.ypipe_url),
+        freellmapi_enabled=_bool(raw.get("freellmapi_enabled"), defaults.freellmapi_enabled),
+        freellmapi_url=_string(raw.get("freellmapi_url"), defaults.freellmapi_url),
+        freellmapi_api_key=_optional_string(raw.get("freellmapi_api_key"), defaults.freellmapi_api_key),
+        omniroute_enabled=_bool(raw.get("omniroute_enabled"), defaults.omniroute_enabled),
+        omniroute_url=_string(raw.get("omniroute_url"), defaults.omniroute_url),
+    )
+
+
 def load_execution_settings() -> ExecutionSettings:
     path = config_path()
     if not path.exists():
@@ -33,9 +72,7 @@ def load_execution_settings() -> ExecutionSettings:
         return ExecutionSettings()
     if not isinstance(raw, dict):
         return ExecutionSettings()
-    defaults = asdict(ExecutionSettings())
-    values = {key: raw.get(key, default) for key, default in defaults.items()}
-    return ExecutionSettings(**values)
+    return _settings_from_mapping(raw)
 
 
 def save_execution_settings(settings: ExecutionSettings) -> Path:
@@ -70,5 +107,4 @@ def fabric_enabled(name: str) -> bool:
 
 
 def configured_policy() -> str:
-    value = load_execution_settings().policy.strip().lower()
-    return value if value in {"auto", "local-only", "cloud-allowed", "cloud-preferred"} else "auto"
+    return load_execution_settings().policy

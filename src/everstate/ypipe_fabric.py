@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable
 from urllib.parse import urljoin, urlparse
 
+from .execution_config import configured_value
 from .provider_fabric import FabricHealth, FabricResponse, FabricTarget
 
 
@@ -43,7 +44,7 @@ class YpipeConfig:
             "on",
         }
         return cls(
-            base_url=os.environ.get("EVERSTATE_YPIPE_URL", cls.base_url),
+            base_url=configured_value("EVERSTATE_YPIPE_URL", "ypipe_url", cls.base_url) or cls.base_url,
             api_key=os.environ.get("EVERSTATE_YPIPE_API_KEY"),
             timeout=timeout,
             allow_remote=allow_remote,
