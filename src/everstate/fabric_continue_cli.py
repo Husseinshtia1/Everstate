@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
+from .execution_config import configured_policy, fabric_enabled
 from .execution_fabric_continuation import ExecutionFabricError, execute_fabric_continuation
 from .fabric_routing import SovereigntyMode, choose_execution_fabric
 from .freellmapi_fabric import FreeLLMAPIError, FreeLLMAPIFabric
@@ -29,7 +30,7 @@ def register(app: typer.Typer, service_factory) -> None:
     @app.command("fabric-continue")
     def fabric_continue(
         path: Path = typer.Option(Path.cwd(), "--path", exists=True, file_okay=False),
-        mode: SovereigntyMode = typer.Option(SovereigntyMode.AUTO, "--mode"),
+        mode: SovereigntyMode | None = typer.Option(None, "--mode", help="Override the saved setup policy for this run."),
         model: str | None = typer.Option(None, "--model", help="Optional exact model id on the selected fabric."),
         no_verify_identity: bool = typer.Option(False, "--no-verify-identity", help="Diagnostics only."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Route without sending canonical project state."),
@@ -38,6 +39,7 @@ def register(app: typer.Typer, service_factory) -> None:
         """Route, execute one verified continuation, and keep Everstate authoritative."""
         service: EverstateService = service_factory()
         packet = service.continuation_packet(path)
+        effective_mode = mode or SovereigntyMode(configured_policy())
 
         fabrics: dict[str, object | None] = {}
         health: dict[str, FabricHealth] = {}
@@ -46,6 +48,10 @@ def register(app: typer.Typer, service_factory) -> None:
             ("freellmapi", FreeLLMAPIFabric),
             ("omniroute", OmniRouteFabric),
         ):
+            if not fabric_enabled(name):
+                fabrics[name] = None
+                health[name] = FabricHealth(status="DISABLED", ready=False, detail="Disabled by Everstate setup policy.")
+                continue
             try:
                 fabric = factory()
                 fabrics[name] = fabric
@@ -56,7 +62,7 @@ def register(app: typer.Typer, service_factory) -> None:
 
         decision = choose_execution_fabric(
             constraints=packet.constraints,
-            mode=mode,
+            mode=effective_mode,
             ypipe_health=health["ypipe"],
             freellmapi_health=health["freellmapi"],
             omniroute_health=health["omniroute"],
@@ -65,7 +71,8 @@ def register(app: typer.Typer, service_factory) -> None:
         base_report = {
             "project_id": packet.project_id,
             "state_version": packet.state_version,
-            "mode": mode.value,
+            "mode": effective_mode.value,
+            "mode_source": "override" if mode is not None else "setup",
             "constraints": list(packet.constraints),
             "selected": decision.selected,
             "reason": decision.reason,
