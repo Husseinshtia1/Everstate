@@ -57,10 +57,6 @@ class LocalStore:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        # A real workstation can have multiple Everstate processes touching the
-        # same local store (CLI, editor integration, agent runner). Give WAL
-        # writers enough time to serialize rather than failing immediately with
-        # "database is locked" under ordinary contention.
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -91,10 +87,7 @@ class LocalStore:
 
     def get_project(self, project_id: str) -> sqlite3.Row | None:
         with self.connect() as conn:
-            return conn.execute(
-                "SELECT * FROM projects WHERE id = ?",
-                (project_id,),
-            ).fetchone()
+            return conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
 
     def get_project_by_root(self, root_path: Path) -> sqlite3.Row | None:
         with self.connect() as conn:
@@ -140,8 +133,7 @@ class LocalStore:
     def latest_state(self, project_id: str) -> ProjectState | None:
         # State versions are immutable snapshots. If an interrupted/manual
         # filesystem operation corrupts the newest JSON row, fall back to the
-        # newest earlier valid snapshot instead of making the project
-        # unreadable. We intentionally do not mutate/delete evidence here.
+        # newest earlier valid snapshot without deleting forensic evidence.
         with self.connect() as conn:
             rows = conn.execute(
                 """
@@ -157,6 +149,17 @@ class LocalStore:
             except (ValueError, TypeError):
                 continue
         return None
+
+    def next_state_version(self, project_id: str) -> int:
+        # Version allocation must consider corrupt rows too. Otherwise recovery
+        # from a corrupt newest snapshot would repeatedly collide with that
+        # already-reserved version number.
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) AS max_version FROM state_versions WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+        return int(row["max_version"]) + 1
 
     def save_state(self, state: ProjectState) -> None:
         with self.connect() as conn:
