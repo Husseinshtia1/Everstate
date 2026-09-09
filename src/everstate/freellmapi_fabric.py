@@ -105,6 +105,10 @@ class FreeLLMAPIFabric:
                 continue
             provider = row.get("owned_by") if isinstance(row.get("owned_by"), str) else None
             targets.append(FabricTarget(id=model_id, provider=provider, model=model_id))
+        # FreeLLMAPI exposes a virtual `auto` model for its own smart router.
+        # Prefer it when available so Everstate delegates provider/model failover
+        # to the service instead of pinning an arbitrary first catalog entry.
+        targets.sort(key=lambda target: (target.id != "auto", target.id))
         return tuple(targets)
 
     def health(self) -> FabricHealth:
