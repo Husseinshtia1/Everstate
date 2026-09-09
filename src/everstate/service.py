@@ -63,11 +63,9 @@ class EverstateService:
         marker_id = _read_identity_marker(root)
         if marker_id is None:
             return stable_project_id(root)
-
         existing = self.store.get_project(marker_id)
         if existing is None:
             return marker_id
-
         existing_root = Path(existing["root_path"])
         if existing_root.resolve() == root.resolve():
             return marker_id
@@ -75,8 +73,23 @@ class EverstateService:
             return marker_id
         return stable_project_id(root)
 
-    def _fresh_state(self, project_id: str) -> ProjectState:
-        return ProjectState(project_id=project_id, version=self.store.next_state_version(project_id))
+    @staticmethod
+    def _carry_state(current: ProjectState | None, project_id: str, version: int) -> ProjectState:
+        if current is None:
+            return ProjectState(project_id=project_id, version=version)
+        return ProjectState(
+            project_id=project_id,
+            version=version,
+            objective=current.objective,
+            current_task=current.current_task,
+            active_constraints=list(current.active_constraints),
+            decisions=list(current.decisions),
+            failed_attempts=list(current.failed_attempts),
+            blockers=list(current.blockers),
+            modified_files=list(current.modified_files),
+            next_action=current.next_action,
+            unresolved_conflicts=list(current.unresolved_conflicts),
+        )
 
     def init_project(self, root: Path) -> str:
         root = root.resolve()
@@ -99,9 +112,7 @@ class EverstateService:
                 self.store.append_event(event)
                 self.store.mutate_state(
                     project_id,
-                    lambda current, version: current
-                    if current is not None
-                    else ProjectState(project_id=project_id, version=version),
+                    lambda current, version: self._carry_state(current, project_id, version),
                 )
             return project_id
 
@@ -129,9 +140,7 @@ class EverstateService:
                 return latest
             return self.store.mutate_state(
                 project_id,
-                lambda current, version: current
-                if current is not None
-                else ProjectState(project_id=project_id, version=version),
+                lambda current, version: self._carry_state(current, project_id, version),
             )
 
         recent_events = self.store.list_events(project_id, limit=200)
@@ -180,7 +189,6 @@ class EverstateService:
         failures = list(current.failed_attempts) if current else []
         blockers = list(current.blockers) if current else []
         next_action = current.next_action if current else None
-
         value = str(payload.get("value", "")).strip()
         if event_type == "objective_set":
             objective = value
@@ -197,16 +205,10 @@ class EverstateService:
         elif event_type == "next_action_set":
             next_action = value
         elif event_type not in {
-            "objective_set",
-            "task_set",
-            "decision_added",
-            "constraint_added",
-            "failure_added",
-            "blocker_added",
-            "next_action_set",
+            "objective_set", "task_set", "decision_added", "constraint_added",
+            "failure_added", "blocker_added", "next_action_set",
         }:
             raise ValueError(f"Unsupported state event: {event_type}")
-
         return ProjectState(
             project_id=project_id,
             version=version,
@@ -232,15 +234,10 @@ class EverstateService:
             payload=payload,
         )
         self.store.append_event(event)
-
         return self.store.mutate_state(
             project_id,
             lambda current, version: self._state_with_event(
-                current,
-                project_id,
-                event_type,
-                payload,
-                version=version,
+                current, project_id, event_type, payload, version=version,
             ),
         )
 
@@ -297,7 +294,6 @@ class EverstateService:
             lines.extend(f"- {path}" for path in state.modified_files)
         else:
             lines.append("- Working tree clean or file tracking unavailable")
-
         self._append_section(lines, "Active decisions:", state.decisions, "None captured yet")
         self._append_section(lines, "Active constraints:", state.active_constraints, "None captured yet")
         self._append_section(lines, "Known failed attempts:", state.failed_attempts, "None captured yet")
