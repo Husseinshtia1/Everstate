@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from . import cli as _cli
+from .council_cli import register as register_council
 from .fabric_check_cli import register as register_fabric_check
 from .fabric_continue_cli import register as register_fabric_continue
 from .fabric_route_cli import register as register_fabric_route
@@ -32,6 +33,7 @@ app = _cli.app
 # Register additive runtime-aware workflows without changing legacy command behavior.
 register_setup(app)
 register_work_start(app, _cli._service)
+register_council(app, _cli._service)
 register_omniroute_check(app)
 register_ypipe_check(app)
 register_fabric_route(app, _cli._service)
