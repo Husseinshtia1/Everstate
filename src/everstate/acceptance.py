@@ -59,59 +59,92 @@ def _is_internal_or_generated(path: str) -> bool:
 
 
 def _add_changed_path(changed: set[str], path: str) -> None:
-    normalized = path.strip().replace("\\", "/")
+    normalized = path.replace("\\", "/")
     if normalized and not _is_internal_or_generated(normalized):
         changed.add(normalized)
 
 
+def _decode_nul_paths(payload: bytes) -> list[str]:
+    return [part.decode("utf-8", errors="surrogateescape") for part in payload.split(b"\0") if part]
+
+
 def _detect_acceptance_baseline(root: Path) -> str | None:
-    result = subprocess.run(
+    history = subprocess.run(
         ["git", "log", "--format=%H%x09%s", "--all"],
         cwd=root,
         check=False,
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        return None
-    for line in result.stdout.splitlines():
-        sha, separator, subject = line.partition("\t")
-        if separator and subject == "Acceptance baseline" and sha:
-            return sha
+    if history.returncode == 0:
+        for line in history.stdout.splitlines():
+            sha, separator, subject = line.partition("\t")
+            if separator and subject == "Acceptance baseline" and sha:
+                return sha
+
+    # An agent may amend/rewrite HEAD. Git's reflog normally retains the
+    # original baseline object, allowing acceptance to compare against the
+    # actual pre-agent repository rather than trusting the rewritten history.
+    reflog = subprocess.run(
+        ["git", "reflog", "--all", "--format=%H%x09%gs"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if reflog.returncode == 0:
+        for line in reflog.stdout.splitlines():
+            sha, separator, subject = line.partition("\t")
+            if separator and "Acceptance baseline" in subject and sha:
+                return sha
     return None
 
 
 def _git_changed_files(root: Path, baseline_ref: str | None = None) -> set[str]:
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
     changed: set[str] = set()
-    for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
-        path = line[3:].strip()
-        if " -> " in path:
-            old_path, new_path = path.split(" -> ", 1)
-            _add_changed_path(changed, old_path)
-            _add_changed_path(changed, new_path)
-        else:
-            _add_changed_path(changed, path)
-
     effective_baseline = baseline_ref or _detect_acceptance_baseline(root)
+
     if effective_baseline:
-        committed = subprocess.run(
-            ["git", "diff", "--name-only", "--no-renames", f"{effective_baseline}..HEAD"],
+        # Compare the complete current tree/index/worktree to the immutable
+        # baseline object. This still works if the coding agent committed or
+        # amended its changes, and -z preserves spaces/non-ASCII filenames.
+        tracked = subprocess.run(
+            ["git", "diff", "--name-only", "--no-renames", "-z", effective_baseline, "--"],
             cwd=root,
             check=True,
             capture_output=True,
-            text=True,
         )
-        for path in committed.stdout.splitlines():
+        for path in _decode_nul_paths(tracked.stdout):
             _add_changed_path(changed, path)
+    else:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "-z"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        # Porcelain v1 -z records status bytes followed by a path. For ordinary
+        # entries the first three bytes are "XY ". Rename records contain a
+        # second NUL-delimited path; treating both paths as evidence is safe.
+        records = status.stdout.split(b"\0")
+        for record in records:
+            if len(record) >= 4:
+                _add_changed_path(
+                    changed,
+                    record[3:].decode("utf-8", errors="surrogateescape"),
+                )
+
+    # Untracked files are not included by `git diff <baseline>`, so collect
+    # them separately with NUL framing. Git-ignored runtime artifacts remain
+    # excluded by both Git and Everstate's internal-artifact filter.
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    for path in _decode_nul_paths(untracked.stdout):
+        _add_changed_path(changed, path)
     return changed
 
 
