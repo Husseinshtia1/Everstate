@@ -50,8 +50,9 @@ def _is_internal_or_generated(path: str) -> bool:
     normalized = path.replace("\\", "/")
     parts = normalized.split("/")
     return (
-        normalized == ".everstate"
+        normalized in {".everstate", ".claude-flow"}
         or normalized.startswith(".everstate/")
+        or normalized.startswith(".claude-flow/")
         or "__pycache__" in parts
         or normalized.endswith(".pyc")
     )
