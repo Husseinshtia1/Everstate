@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from .acceptance import AcceptanceCheck, AcceptanceReport, ContinuityScenario, evaluate_scenario
-from .agent_council import CouncilMode, CouncilResult, execute_agent_council
+from .agent_council import CouncilError, CouncilMode, CouncilResult, execute_agent_council
 from .council_cli import _select_participants
 from .providers import ProviderAdapter
 from .ruflo_orchestrator import RufloError, RufloOrchestrator
@@ -24,11 +25,13 @@ class StateLevel(StrEnum):
 @dataclass(frozen=True)
 class RealAcceptanceRun:
     workspace: Path
+    artifacts_dir: Path
     project_id: str
     initial_state_version: int
     final_state_version: int
     state_level: StateLevel
     council_backend: str
+    council_participants: int
     provider: str
     provider_returncode: int | None
     report: AcceptanceReport
@@ -72,13 +75,13 @@ def seed_state(
     service.init_project(root)
     service.set_objective(root, scenario.objective)
     service.set_task(root, scenario.current_task)
+    service.set_next_action(root, scenario.next_action)
     if level is StateLevel.MINIMAL:
         return
     for value in scenario.decisions:
         service.add_decision(root, value)
     for value in scenario.constraints:
         service.add_constraint(root, value)
-    service.set_next_action(root, scenario.next_action)
     if level is StateLevel.STANDARD:
         return
     for value in scenario.failed_attempts:
@@ -86,7 +89,10 @@ def seed_state(
     for value in scenario.blockers:
         service.add_blocker(root, value)
     if level is StateLevel.CRITICAL:
-        service.add_constraint(root, "EVERSTATE_ACCEPTANCE: require independent council review before implementation")
+        service.add_constraint(
+            root,
+            "EVERSTATE_ACCEPTANCE: independent council review is mandatory before implementation",
+        )
 
 
 def _council_summary(result: CouncilResult) -> str:
@@ -104,47 +110,99 @@ def _council_summary(result: CouncilResult) -> str:
     return "\n".join(lines)
 
 
+def _council_payload(result: CouncilResult) -> dict[str, object]:
+    return {
+        "project_id": result.project_id,
+        "state_version": result.state_version,
+        "question": result.question,
+        "mode": result.mode.value,
+        "consensus": result.consensus,
+        "disagreements": list(result.disagreements),
+        "average_confidence": result.average_confidence,
+        "evidence_coverage": result.evidence_coverage,
+        "quorum_met": result.quorum_met,
+        "canonical_state_mutated": result.canonical_state_mutated,
+        "opinions": [
+            {**asdict(opinion), "verdict": opinion.verdict.value}
+            for opinion in result.opinions
+        ],
+        "failures": [asdict(failure) for failure in result.failures],
+    }
+
+
+def _resolve_council_preflight(
+    *,
+    service: EverstateService,
+    root: Path,
+    orchestrator: str,
+    min_agents: int,
+) -> tuple[tuple[object, ...], str, RufloOrchestrator]:
+    packet = service.continuation_packet(root)
+    participants, _, _ = _select_participants(
+        packet,
+        ("architect", "critic", "verifier"),
+        3,
+    )
+    if len(participants) < min_agents:
+        raise CouncilError(
+            f"Real acceptance requires at least {min_agents} eligible council participants; "
+            f"only {len(participants)} are ready."
+        )
+
+    selected = orchestrator.strip().lower()
+    if selected not in {"auto", "ruflo", "native"}:
+        raise ValueError("orchestrator must be auto, ruflo, or native")
+
+    ruflo = RufloOrchestrator()
+    health = ruflo.health()
+    use_ruflo = selected == "ruflo" or (selected == "auto" and health.ready)
+    if selected == "ruflo" and not health.ready:
+        raise RufloError(health.detail)
+    return participants, "ruflo" if use_ruflo else "native", ruflo
+
+
 def run_council(
     *,
     service: EverstateService,
     root: Path,
     question: str,
     orchestrator: str,
-) -> tuple[CouncilResult, str]:
+    min_agents: int = 2,
+    mode: CouncilMode = CouncilMode.DEBATE,
+    rounds: int = 2,
+) -> tuple[CouncilResult, str, int]:
     packet = service.continuation_packet(root)
-    participants, _, _ = _select_participants(packet, ("architect", "critic", "verifier"), 3)
-    ruflo = RufloOrchestrator()
-    health = ruflo.health()
-    selected = orchestrator.strip().lower()
-    if selected not in {"auto", "ruflo", "native"}:
-        raise ValueError("orchestrator must be auto, ruflo, or native")
-    use_ruflo = selected == "ruflo" or (selected == "auto" and health.ready)
-    if selected == "ruflo" and not health.ready:
-        raise RufloError(health.detail)
-    backend = "native"
-    if use_ruflo:
+    participants, backend, ruflo = _resolve_council_preflight(
+        service=service,
+        root=root,
+        orchestrator=orchestrator,
+        min_agents=min_agents,
+    )
+
+    if backend == "ruflo":
         try:
             ruflo.prepare_council(
                 root=root,
                 packet=packet,
                 question=question,
                 participants=participants,
-                mode=CouncilMode.PARALLEL_REVIEW,
+                mode=mode,
             )
-            backend = "ruflo"
         except RufloError:
-            if selected == "ruflo":
+            if orchestrator.strip().lower() == "ruflo":
                 raise
             backend = "native"
+
     result = execute_agent_council(
         packet=packet,
         question=question,
         participants=participants,
-        mode=CouncilMode.PARALLEL_REVIEW,
+        mode=mode,
+        rounds=rounds,
     )
     if backend == "ruflo":
         ruflo.verify_result(packet=packet, result=result)
-    return result, backend
+    return result, backend, len(participants)
 
 
 def primary_prompt(
@@ -178,17 +236,31 @@ Complete the implementation now. Leave the working tree with the finished implem
 """
 
 
+def _semantic_snapshot(packet) -> dict[str, object]:
+    return {
+        "project_id": packet.project_id,
+        "objective": packet.objective,
+        "current_task": packet.current_task,
+        "decisions": tuple(packet.decisions),
+        "constraints": tuple(packet.constraints),
+        "failed_attempts": tuple(packet.failed_attempts),
+        "blockers": tuple(packet.blockers),
+        "next_action": packet.next_action,
+    }
+
+
 def _append_checks(
     report: AcceptanceReport,
     *,
     provider_returncode: int,
-    project_id_before: str,
-    project_id_after: str,
-    state_version_before: int,
-    state_version_after: int,
-    constraints_before: tuple[str, ...],
-    constraints_after: tuple[str, ...],
+    before,
+    after,
 ) -> AcceptanceReport:
+    before_semantic = _semantic_snapshot(before)
+    after_semantic = _semantic_snapshot(after)
+    changed_fields = [
+        key for key in before_semantic if before_semantic[key] != after_semantic[key]
+    ]
     checks = list(report.checks)
     checks.extend(
         [
@@ -199,18 +271,22 @@ def _append_checks(
             ),
             AcceptanceCheck(
                 name="canonical-project-identity",
-                passed=project_id_before == project_id_after,
-                details=f"before={project_id_before} after={project_id_after}",
+                passed=before.project_id == after.project_id,
+                details=f"before={before.project_id} after={after.project_id}",
             ),
             AcceptanceCheck(
-                name="canonical-state-not-mutated-by-agent",
-                passed=state_version_before == state_version_after,
-                details=f"before={state_version_before} after={state_version_after}",
+                name="canonical-semantic-state-preserved",
+                passed=not changed_fields,
+                details=(
+                    "semantic truth preserved"
+                    if not changed_fields
+                    else "changed fields: " + ", ".join(changed_fields)
+                ),
             ),
             AcceptanceCheck(
-                name="canonical-constraints-preserved",
-                passed=constraints_before == constraints_after,
-                details=f"before={constraints_before!r} after={constraints_after!r}",
+                name="state-version-monotonic",
+                passed=after.state_version >= before.state_version,
+                details=f"before={before.state_version} after={after.state_version}",
             ),
         ]
     )
@@ -220,6 +296,14 @@ def _append_checks(
         passed=all(check.passed for check in checks),
         score=passed_count / len(checks) if checks else 1.0,
         checks=checks,
+    )
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -233,30 +317,79 @@ def run_real_acceptance(
     state_level: StateLevel = StateLevel.FULL,
     orchestrator: str = "auto",
     require_council: bool = True,
+    min_council_agents: int = 2,
     dry_run: bool = False,
 ) -> RealAcceptanceRun:
     root = prepare_workspace(template, workspace)
     seed_state(service, root, scenario, state_level)
     before = service.continuation_packet(root)
+    artifacts = root / ".everstate" / "real-acceptance"
+    _write_json(artifacts / "state-before.json", before.model_dump(mode="json"))
 
+    council_result: CouncilResult | None = None
+    council_backend = "off"
+    council_participants = 0
+    if require_council:
+        participants, council_backend, ruflo = _resolve_council_preflight(
+            service=service,
+            root=root,
+            orchestrator=orchestrator,
+            min_agents=min_council_agents,
+        )
+        council_participants = len(participants)
+        health = ruflo.health()
+        _write_json(
+            artifacts / "council-preflight.json",
+            {
+                "backend": council_backend,
+                "participants": [participant.id for participant in participants],
+                "ruflo": {
+                    "ready": health.ready,
+                    "version": health.version,
+                    "detail": health.detail,
+                },
+            },
+        )
+
+    prompt = primary_prompt(
+        service=service,
+        root=root,
+        scenario=scenario,
+        council=None,
+    )
     if dry_run:
-        primary_prompt(service=service, root=root, scenario=scenario, council=None)
+        (artifacts / "primary-prompt-preview.txt").write_text(prompt, encoding="utf-8")
+        report = AcceptanceReport(
+            scenario=scenario.name,
+            passed=True,
+            score=1.0,
+            checks=[
+                AcceptanceCheck(
+                    name="dry-run-preflight",
+                    passed=True,
+                    details=(
+                        f"provider={provider.name}; council={council_backend}; "
+                        f"participants={council_participants}; no model contacted"
+                    ),
+                )
+            ],
+        )
         return RealAcceptanceRun(
             workspace=root,
+            artifacts_dir=artifacts,
             project_id=before.project_id,
             initial_state_version=before.state_version,
             final_state_version=before.state_version,
             state_level=state_level,
-            council_backend="not-run",
+            council_backend=council_backend,
+            council_participants=council_participants,
             provider=provider.name,
             provider_returncode=None,
-            report=AcceptanceReport(scenario=scenario.name, passed=True, score=1.0, checks=[]),
+            report=report,
         )
 
-    council_result: CouncilResult | None = None
-    council_backend = "off"
     if require_council:
-        council_result, council_backend = run_council(
+        council_result, council_backend, council_participants = run_council(
             service=service,
             root=root,
             question=(
@@ -264,7 +397,11 @@ def run_real_acceptance(
                 "security, persistence, and test risks before the primary coding agent changes files."
             ),
             orchestrator=orchestrator,
+            min_agents=min_council_agents,
+            mode=CouncilMode.DEBATE,
+            rounds=2,
         )
+        _write_json(artifacts / "council-result.json", _council_payload(council_result))
 
     prompt = primary_prompt(
         service=service,
@@ -272,26 +409,30 @@ def run_real_acceptance(
         scenario=scenario,
         council=council_result,
     )
+    (artifacts / "primary-prompt.txt").write_text(prompt, encoding="utf-8")
+
     returncode = provider.launch(root, prompt)
     after = service.continuation_packet(root)
+    _write_json(artifacts / "state-after.json", after.model_dump(mode="json"))
+
     report = evaluate_scenario(root, scenario)
     report = _append_checks(
         report,
         provider_returncode=returncode,
-        project_id_before=before.project_id,
-        project_id_after=after.project_id,
-        state_version_before=before.state_version,
-        state_version_after=after.state_version,
-        constraints_before=before.constraints,
-        constraints_after=after.constraints,
+        before=before,
+        after=after,
     )
+    _write_json(artifacts / "acceptance-report.json", report.model_dump(mode="json"))
+
     return RealAcceptanceRun(
         workspace=root,
+        artifacts_dir=artifacts,
         project_id=before.project_id,
         initial_state_version=before.state_version,
         final_state_version=after.state_version,
         state_level=state_level,
         council_backend=council_backend,
+        council_participants=council_participants,
         provider=provider.name,
         provider_returncode=returncode,
         report=report,
