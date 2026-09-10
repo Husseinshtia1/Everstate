@@ -73,8 +73,18 @@ def snapshot(root: Path) -> GitSnapshot:
 
     branch = _run_git(root, "branch", "--show-current", check=False) or "DETACHED"
     head = _run_git(root, "rev-parse", "HEAD", check=False) or None
-    raw_status = _run_git(root, "status", "--porcelain=v1", "--untracked-files=all")
-    diff_stat = _run_git(root, "diff", "--stat", "HEAD", check=False)
+    # Git quotes non-ASCII paths by default according to core.quotePath. The
+    # canonical state needs the actual repository path, not a C-style escaped
+    # representation, so disable quoting for this machine-readable snapshot.
+    raw_status = _run_git(
+        root,
+        "-c",
+        "core.quotepath=false",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+    )
+    diff_stat = _run_git(root, "-c", "core.quotepath=false", "diff", "--stat", "HEAD", check=False)
 
     filtered_status_lines: list[str] = []
     modified_files: list[str] = []
