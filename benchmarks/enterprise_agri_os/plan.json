@@ -1,0 +1,171 @@
+{
+  "name": "EVR-AGRI-ENTERPRISE-001",
+  "objective": "Build a production-oriented enterprise Agricultural Agentic Operating System implementing the supplied master plan: persistent agricultural world state, event-driven intelligence, governed multi-agent operations, integrations, public website, product UI, APIs, auditability, security, and deployable infrastructure.",
+  "decisions": [
+    "Use a modular monolith plus separate workers before splitting into microservices.",
+    "Use PostgreSQL/PostGIS as operational source of truth, Timescale-compatible time-series design, Redis for cache/locks, S3-compatible object storage, and an event bus abstraction.",
+    "LLMs are reasoning components, never the system of record or deterministic compliance engine.",
+    "Every actionable fact carries provenance, observed_at, freshness/TTL, quality, and confidence metadata.",
+    "High-risk writes require deterministic policy evaluation and human approval.",
+    "External provider objects must be normalized into a proprietary canonical agricultural model.",
+    "Provider-specific integrations sit behind capability-oriented connector interfaces.",
+    "The product is B2B multi-tenant from day one with organization/farm scoped authorization.",
+    "Frontend is Next.js/TypeScript with a control-room visual language; backend is Python/FastAPI; infrastructure is containerized and described as code."
+  ],
+  "constraints": [
+    "Do not implement compliance as unconstrained LLM judgment.",
+    "Do not let external documents or API text become executable instructions.",
+    "Do not expose connector secrets to model context.",
+    "Do not trust client-provided tenant identifiers for authorization.",
+    "Do not allow critical physical, chemical, payment, or purchase actions without policy/approval gates.",
+    "Do not replace the canonical world state with chat history or vector memory.",
+    "Preserve protected MASTER_PLAN.md and verify_enterprise.py exactly.",
+    "Every stage must preserve all earlier passing capabilities."
+  ],
+  "failed_attempts": [
+    "A single giant LLM prompt without stage gates is rejected because it can silently omit enterprise requirements.",
+    "A chatbot-first architecture without canonical world state is rejected because it cannot provide auditable operational truth."
+  ],
+  "blockers": [
+    "Live third-party API credentials are intentionally unavailable in the benchmark; connectors must provide production adapters plus deterministic mock/sandbox modes.",
+    "Physical equipment control is not permitted in benchmark execution; critical action contracts and safety gates must exist without actuating real machinery."
+  ],
+  "protected_files": ["MASTER_PLAN.md", "verify_enterprise.py"],
+  "stages": [
+    {
+      "id": "foundation",
+      "title": "Enterprise repository and product foundation",
+      "task": "Create the enterprise monorepo foundation, architecture documentation, backend/frontend package definitions, local development stack, configuration model, and public product README.",
+      "next_action": "Establish multi-tenant identity and the canonical agricultural data model.",
+      "required_changed_files": ["README.md", "docs/architecture.md", "backend/pyproject.toml", "frontend/package.json", "docker-compose.yml"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "foundation"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "tenancy-domain",
+      "title": "Identity, tenancy, RBAC, and canonical agricultural ontology",
+      "task": "Implement organization/farm scoped identity and RBAC plus canonical entities for farms, fields, crop cycles, equipment, workers, inventory, livestock, suppliers, contracts, warehouses, and tenant-safe repository boundaries.",
+      "next_action": "Build agricultural events and persistent world state with provenance and freshness.",
+      "required_changed_files": ["backend/app/domain/models.py", "backend/app/identity/rbac.py", "backend/app/identity/tenancy.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "tenancy-domain"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "world-state",
+      "title": "Event model and persistent agricultural world state",
+      "task": "Implement the agricultural event envelope, provenance/freshness model, persistent world-state projection, fact confidence metadata, stale-data semantics, timelines, and deterministic state transitions.",
+      "next_action": "Connect external data sources through normalized connector contracts.",
+      "required_changed_files": ["backend/app/events/models.py", "backend/app/world_state/models.py", "backend/app/world_state/service.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "world-state"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "connectors",
+      "title": "Weather, satellite, soil, IoT, machinery, ERP, and regulatory connector layer",
+      "task": "Implement capability-oriented connectors and normalization boundaries for weather providers, Sentinel/Planet-style satellite sources, SoilGrids-style soil baseline, MQTT/HTTP IoT, Deere-style machinery APIs, ERP, market, and regulatory sources. Include deterministic mock/sandbox implementations.",
+      "next_action": "Add intelligence, risk, forecasting, vision/satellite analysis interfaces, and optimization.",
+      "required_changed_files": ["backend/app/connectors/base.py", "backend/app/connectors/weather.py", "backend/app/connectors/satellite.py", "backend/app/connectors/iot.py", "backend/app/connectors/deere.py", "backend/app/connectors/regulatory.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "connectors"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "intelligence",
+      "title": "Risk, ML, forecasting, and optimization layer",
+      "task": "Implement interfaces and reference algorithms for weather/agronomic risk detection, vegetation anomalies, yield/irrigation forecasts, confidence calibration, model registry metadata, and operations scheduling/optimization without using an LLM for deterministic numeric work.",
+      "next_action": "Build governed tool access, policy evaluation, approvals, and action risk levels.",
+      "required_changed_files": ["backend/app/intelligence/risk.py", "backend/app/intelligence/forecasting.py", "backend/app/intelligence/optimization.py", "backend/app/intelligence/model_registry.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "intelligence"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "governance",
+      "title": "Tool registry, policy engine, approvals, and action safety",
+      "task": "Implement read/safe-write/controlled-write/critical-write tool classes, deterministic policy decisions ALLOW/DENY/REQUIRE_APPROVAL/REQUIRE_EVIDENCE, action inbox entities, dual approval support, idempotency, and audit-safe action execution contracts.",
+      "next_action": "Implement the structured multi-agent control plane.",
+      "required_changed_files": ["backend/app/tools/registry.py", "backend/app/policy/engine.py", "backend/app/approvals/service.py", "backend/app/actions/models.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "governance"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "agents",
+      "title": "Supervisor and agricultural agent workforce",
+      "task": "Implement structured contracts for Supervisor, Agronomy, Operations, Weather/Risk, Irrigation, Procurement, Logistics, Compliance, Machinery, Finance, and optional Livestock agents; shared blackboard/task workspace; evidence-linked messages; conflict resolution; read/write scopes; escalation rules; and model routing abstraction.",
+      "next_action": "Implement daily operations, workers, tasks, inventory, scheduling, and farm execution workflows.",
+      "required_changed_files": ["backend/app/agents/contracts.py", "backend/app/agents/supervisor.py", "backend/app/agents/conflict_resolver.py", "backend/app/agents/registry.py", "backend/app/agents/blackboard.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "agents"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "operations",
+      "title": "Farm operations, tasks, workers, machinery, inventory, and workflows",
+      "task": "Implement operational services for tasks, assignments, workers, machines, inventory, irrigation plans, scheduling, timelines, alerts, and durable workflow definitions suitable for long-running operations and recovery.",
+      "next_action": "Implement compliance, procurement, supplier, and logistics business modules.",
+      "required_changed_files": ["backend/app/operations/tasks.py", "backend/app/operations/scheduling.py", "backend/app/inventory/service.py", "backend/app/workflows/definitions.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "operations"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "business-modules",
+      "title": "Compliance, procurement, finance, logistics, and traceability",
+      "task": "Implement deterministic compliance checks with evidence hierarchy, product/application constraints, RFQ and supplier comparison flows, procurement approvals, shipment/storage logistics, basic economics, and traceability records.",
+      "next_action": "Expose tenant-safe APIs, webhooks, and tool/MCP boundaries.",
+      "required_changed_files": ["backend/app/compliance/engine.py", "backend/app/procurement/service.py", "backend/app/logistics/service.py", "backend/app/finance/service.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "business-modules"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "api-platform",
+      "title": "Enterprise API, webhooks, tool gateway, and developer platform",
+      "task": "Implement FastAPI application structure and versioned APIs for farms, fields/state/timeline, recommendations, tasks, agent runs, actions/approvals, integrations, webhooks, health, and developer-facing connector/tool contracts with tenant enforcement.",
+      "next_action": "Build the public website and core control-room product interface.",
+      "required_changed_files": ["backend/app/main.py", "backend/app/api/farms.py", "backend/app/api/fields.py", "backend/app/api/actions.py", "backend/app/api/webhooks.py"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "api-platform"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "web-product",
+      "title": "Public website and agricultural command center",
+      "task": "Build the Next.js public site and authenticated product shell with control-room visual language. Include Home, Platform, Solutions, Industries, Developers, Resources, Security, Pricing, Company, Book Demo plus Command Center, Map, Today, Ask, Agents, Alerts, Action Inbox, Timeline, farm/field views, and evidence panels.",
+      "next_action": "Add field onboarding, PWA/mobile workflows, voice capture, and accessibility/responsiveness.",
+      "required_changed_files": ["frontend/app/page.tsx", "frontend/app/platform/page.tsx", "frontend/app/app/command-center/page.tsx", "frontend/app/app/today/page.tsx", "frontend/app/app/agents/page.tsx", "frontend/app/app/actions/page.tsx"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "web-product"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "onboarding-mobile",
+      "title": "Onboarding, geospatial import, PWA/mobile, voice, and field-worker UX",
+      "task": "Implement onboarding contracts for GeoJSON/KML/SHP/CSV/Excel/manual field drawing, zero-hardware first insight flow, PWA metadata, mobile task views, geolocation/photo/voice structured capture interfaces, and confirmation requirements for ambiguous voice extraction.",
+      "next_action": "Add security hardening, immutable audit, observability, and evaluation infrastructure.",
+      "required_changed_files": ["backend/app/onboarding/service.py", "frontend/app/app/onboarding/page.tsx", "frontend/app/app/my-tasks/page.tsx", "frontend/public/manifest.json"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "onboarding-mobile"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "security-observability",
+      "title": "Security, audit, evidence, observability, and AI evaluation",
+      "task": "Implement immutable audit contracts, external-content untrusted-data boundaries, secret references, encryption/security documentation, OpenTelemetry instrumentation interfaces, agent-run observability, evidence maps, confidence computation from data quality/freshness, and agricultural gold-scenario evaluation fixtures.",
+      "next_action": "Add production deployment, workflow/event infrastructure, CI/CD, and operational runbooks.",
+      "required_changed_files": ["backend/app/audit/service.py", "backend/app/security/untrusted_data.py", "backend/app/observability/telemetry.py", "backend/app/evaluation/scenarios.py", "docs/security.md"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "security-observability"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "deployment",
+      "title": "Production deployment, durability, eventing, and infrastructure as code",
+      "task": "Complete container definitions, local and production compose topology, Terraform modules, environment configuration, event-bus and durable-workflow adapters, CI/CD, migrations, backup/restore and incident runbooks, health checks, and deployment documentation.",
+      "next_action": "Run the final enterprise integration gate and repair every failing requirement.",
+      "required_changed_files": ["infra/terraform/main.tf", ".github/workflows/ci.yml", "backend/Dockerfile", "frontend/Dockerfile", "docs/runbooks/operations.md"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "deployment"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "final-integration",
+      "title": "Full enterprise agricultural operating system acceptance",
+      "task": "Review the entire generated system against MASTER_PLAN.md, fill all missing cross-module integration points, tests, docs, demo/sandbox data, and operator workflows, and ensure the repository is coherent as one enterprise product rather than disconnected scaffolding.",
+      "next_action": "Deliver the complete audited enterprise build with all deterministic gates passing.",
+      "required_changed_files": ["README.md", "backend/app/main.py", "frontend/app/page.tsx", "docs/architecture.md"],
+      "validation_commands": [{"command": ["python", "verify_enterprise.py", "--stage", "final"]}],
+      "max_attempts": 4
+    }
+  ]
+}
