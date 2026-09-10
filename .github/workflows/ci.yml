@@ -68,6 +68,7 @@ jobs:
           assert run.enabled
           assert run.task_registered
           assert run.topology == "star"
-          assert run.strategy == "parallel"
+          assert run.strategy == "analysis"
+          assert run.task_strategy == "analysis"
           print(run)
           PY
