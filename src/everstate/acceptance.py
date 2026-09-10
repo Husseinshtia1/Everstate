@@ -64,6 +64,23 @@ def _add_changed_path(changed: set[str], path: str) -> None:
         changed.add(normalized)
 
 
+def _detect_acceptance_baseline(root: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "log", "--format=%H%x09%s", "--all"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        sha, separator, subject = line.partition("\t")
+        if separator and subject == "Acceptance baseline" and sha:
+            return sha
+    return None
+
+
 def _git_changed_files(root: Path, baseline_ref: str | None = None) -> set[str]:
     result = subprocess.run(
         ["git", "status", "--porcelain"],
@@ -84,9 +101,10 @@ def _git_changed_files(root: Path, baseline_ref: str | None = None) -> set[str]:
         else:
             _add_changed_path(changed, path)
 
-    if baseline_ref:
+    effective_baseline = baseline_ref or _detect_acceptance_baseline(root)
+    if effective_baseline:
         committed = subprocess.run(
-            ["git", "diff", "--name-only", "--no-renames", f"{baseline_ref}..HEAD"],
+            ["git", "diff", "--name-only", "--no-renames", f"{effective_baseline}..HEAD"],
             cwd=root,
             check=True,
             capture_output=True,
