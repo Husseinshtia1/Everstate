@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -240,6 +239,20 @@ def run_real_acceptance(
     seed_state(service, root, scenario, state_level)
     before = service.continuation_packet(root)
 
+    if dry_run:
+        primary_prompt(service=service, root=root, scenario=scenario, council=None)
+        return RealAcceptanceRun(
+            workspace=root,
+            project_id=before.project_id,
+            initial_state_version=before.state_version,
+            final_state_version=before.state_version,
+            state_level=state_level,
+            council_backend="not-run",
+            provider=provider.name,
+            provider_returncode=None,
+            report=AcceptanceReport(scenario=scenario.name, passed=True, score=1.0, checks=[]),
+        )
+
     council_result: CouncilResult | None = None
     council_backend = "off"
     if require_council:
@@ -259,19 +272,6 @@ def run_real_acceptance(
         scenario=scenario,
         council=council_result,
     )
-    if dry_run:
-        return RealAcceptanceRun(
-            workspace=root,
-            project_id=before.project_id,
-            initial_state_version=before.state_version,
-            final_state_version=before.state_version,
-            state_level=state_level,
-            council_backend=council_backend,
-            provider=provider.name,
-            provider_returncode=None,
-            report=AcceptanceReport(scenario=scenario.name, passed=True, score=1.0, checks=[]),
-        )
-
     returncode = provider.launch(root, prompt)
     after = service.continuation_packet(root)
     report = evaluate_scenario(root, scenario)
