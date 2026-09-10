@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import py_compile
+import shutil
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -49,31 +54,17 @@ STAGES: dict[str, list[str]] = {
         "backend/app/api/actions.py", "backend/app/api/integrations.py", "backend/app/api/webhooks.py"
     ],
     "web-product": [
-        "frontend/app/page.tsx",
-        "frontend/app/platform/page.tsx",
-        "frontend/app/solutions/page.tsx",
-        "frontend/app/industries/page.tsx",
-        "frontend/app/developers/page.tsx",
-        "frontend/app/resources/page.tsx",
-        "frontend/app/security/page.tsx",
-        "frontend/app/pricing/page.tsx",
-        "frontend/app/company/page.tsx",
-        "frontend/app/book-demo/page.tsx",
-        "frontend/app/app/command-center/page.tsx",
-        "frontend/app/app/map/page.tsx",
-        "frontend/app/app/today/page.tsx",
-        "frontend/app/app/ask/page.tsx",
-        "frontend/app/app/agents/page.tsx",
-        "frontend/app/app/alerts/page.tsx",
-        "frontend/app/app/actions/page.tsx",
-        "frontend/app/app/timeline/page.tsx",
-        "frontend/app/app/farms/page.tsx",
-        "frontend/app/app/fields/page.tsx"
+        "frontend/app/page.tsx", "frontend/app/platform/page.tsx", "frontend/app/solutions/page.tsx",
+        "frontend/app/industries/page.tsx", "frontend/app/developers/page.tsx", "frontend/app/resources/page.tsx",
+        "frontend/app/security/page.tsx", "frontend/app/pricing/page.tsx", "frontend/app/company/page.tsx",
+        "frontend/app/book-demo/page.tsx", "frontend/app/app/command-center/page.tsx", "frontend/app/app/map/page.tsx",
+        "frontend/app/app/today/page.tsx", "frontend/app/app/ask/page.tsx", "frontend/app/app/agents/page.tsx",
+        "frontend/app/app/alerts/page.tsx", "frontend/app/app/actions/page.tsx", "frontend/app/app/timeline/page.tsx",
+        "frontend/app/app/farms/page.tsx", "frontend/app/app/fields/page.tsx"
     ],
     "onboarding-mobile": [
         "backend/app/onboarding/service.py", "backend/app/voice/service.py",
-        "frontend/app/app/onboarding/page.tsx", "frontend/app/app/my-tasks/page.tsx",
-        "frontend/public/manifest.json"
+        "frontend/app/app/onboarding/page.tsx", "frontend/app/app/my-tasks/page.tsx", "frontend/public/manifest.json"
     ],
     "security-observability": [
         "backend/app/audit/service.py", "backend/app/security/untrusted_data.py",
@@ -93,75 +84,51 @@ FINAL_EXTRA = [
 ]
 
 FORBIDDEN_GLOBAL = [
-    "TODO: implement later",
-    "pass  # TODO",
-    "ALLOW_ALL_TENANTS",
-    "DISABLE_AUTH = True",
-    "BYPASS_APPROVAL = True",
-    "IGNORE_COMPLIANCE = True",
+    "TODO: implement later", "pass  # TODO", "ALLOW_ALL_TENANTS", "DISABLE_AUTH = True",
+    "BYPASS_APPROVAL = True", "IGNORE_COMPLIANCE = True",
 ]
 
 REQUIRED_MARKERS: dict[str, list[tuple[str, str]]] = {
     "tenancy-domain": [
-        ("backend/app/identity/rbac.py", "OWNER"),
-        ("backend/app/identity/rbac.py", "COMPLIANCE"),
-        ("backend/app/identity/tenancy.py", "organization_id"),
-        ("backend/app/domain/models.py", "CropCycle"),
+        ("backend/app/identity/rbac.py", "OWNER"), ("backend/app/identity/rbac.py", "COMPLIANCE"),
+        ("backend/app/identity/tenancy.py", "organization_id"), ("backend/app/domain/models.py", "CropCycle"),
         ("backend/app/domain/models.py", "Field"),
     ],
     "world-state": [
-        ("backend/app/world_state/models.py", "confidence"),
-        ("backend/app/world_state/models.py", "fresh"),
-        ("backend/app/events/models.py", "event_type"),
-        ("backend/app/world_state/service.py", "stale"),
+        ("backend/app/world_state/models.py", "confidence"), ("backend/app/world_state/models.py", "fresh"),
+        ("backend/app/events/models.py", "event_type"), ("backend/app/world_state/service.py", "stale"),
     ],
     "connectors": [
-        ("backend/app/connectors/base.py", "capabil"),
-        ("backend/app/connectors/weather.py", "forecast"),
-        ("backend/app/connectors/satellite.py", "NDVI"),
-        ("backend/app/connectors/iot.py", "Sensor"),
+        ("backend/app/connectors/base.py", "capabil"), ("backend/app/connectors/weather.py", "forecast"),
+        ("backend/app/connectors/satellite.py", "NDVI"), ("backend/app/connectors/iot.py", "Sensor"),
         ("backend/app/connectors/regulatory.py", "evidence"),
     ],
     "governance": [
-        ("backend/app/policy/engine.py", "REQUIRE_APPROVAL"),
-        ("backend/app/policy/engine.py", "DENY"),
-        ("backend/app/tools/registry.py", "CRITICAL"),
-        ("backend/app/approvals/service.py", "approval"),
+        ("backend/app/policy/engine.py", "REQUIRE_APPROVAL"), ("backend/app/policy/engine.py", "DENY"),
+        ("backend/app/tools/registry.py", "CRITICAL"), ("backend/app/approvals/service.py", "approval"),
     ],
     "agents": [
-        ("backend/app/agents/contracts.py", "evidence"),
-        ("backend/app/agents/supervisor.py", "Supervisor"),
-        ("backend/app/agents/conflict_resolver.py", "fresh"),
-        ("backend/app/agents/blackboard.py", "constraint"),
+        ("backend/app/agents/contracts.py", "evidence"), ("backend/app/agents/supervisor.py", "Supervisor"),
+        ("backend/app/agents/conflict_resolver.py", "fresh"), ("backend/app/agents/blackboard.py", "constraint"),
     ],
     "business-modules": [
-        ("backend/app/compliance/engine.py", "harvest"),
-        ("backend/app/procurement/service.py", "RFQ"),
+        ("backend/app/compliance/engine.py", "harvest"), ("backend/app/procurement/service.py", "RFQ"),
         ("backend/app/logistics/service.py", "shipment"),
     ],
     "api-platform": [
-        ("backend/app/main.py", "FastAPI"),
-        ("backend/app/api/actions.py", "approve"),
-        ("backend/app/api/webhooks.py", "webhook"),
-        ("backend/app/api/agent_runs.py", "agent"),
+        ("backend/app/main.py", "FastAPI"), ("backend/app/api/actions.py", "approve"),
+        ("backend/app/api/webhooks.py", "webhook"), ("backend/app/api/agent_runs.py", "agent"),
     ],
     "web-product": [
-        ("frontend/app/page.tsx", "agricultur"),
-        ("frontend/app/platform/page.tsx", "World State"),
-        ("frontend/app/developers/page.tsx", "API"),
-        ("frontend/app/app/command-center/page.tsx", "Command"),
-        ("frontend/app/app/map/page.tsx", "Map"),
-        ("frontend/app/app/today/page.tsx", "Today"),
-        ("frontend/app/app/ask/page.tsx", "Ask"),
-        ("frontend/app/app/agents/page.tsx", "Agent"),
-        ("frontend/app/app/actions/page.tsx", "Appro"),
-        ("frontend/app/app/timeline/page.tsx", "Timeline"),
+        ("frontend/app/page.tsx", "agricultur"), ("frontend/app/platform/page.tsx", "World State"),
+        ("frontend/app/developers/page.tsx", "API"), ("frontend/app/app/command-center/page.tsx", "Command"),
+        ("frontend/app/app/map/page.tsx", "Map"), ("frontend/app/app/today/page.tsx", "Today"),
+        ("frontend/app/app/ask/page.tsx", "Ask"), ("frontend/app/app/agents/page.tsx", "Agent"),
+        ("frontend/app/app/actions/page.tsx", "Appro"), ("frontend/app/app/timeline/page.tsx", "Timeline"),
     ],
     "security-observability": [
-        ("backend/app/security/untrusted_data.py", "untrusted"),
-        ("backend/app/audit/service.py", "audit"),
-        ("backend/app/observability/telemetry.py", "trace"),
-        ("backend/app/evaluation/scenarios.py", "stale"),
+        ("backend/app/security/untrusted_data.py", "untrusted"), ("backend/app/audit/service.py", "audit"),
+        ("backend/app/observability/telemetry.py", "trace"), ("backend/app/evaluation/scenarios.py", "stale"),
     ],
 }
 
@@ -188,8 +155,7 @@ def check_markers(stage: str) -> None:
 
 
 def check_no_forbidden() -> None:
-    roots = [ROOT / "backend", ROOT / "frontend", ROOT / "infra"]
-    for base in roots:
+    for base in [ROOT / "backend", ROOT / "frontend", ROOT / "infra"]:
         if not base.exists():
             continue
         for path in base.rglob("*"):
@@ -231,7 +197,6 @@ def check_enterprise_density() -> None:
         fail(f"enterprise backend is under-built: only {len(py_files)} Python modules")
     if len(ts_files) < 20:
         fail(f"enterprise frontend is under-built: only {len(ts_files)} TypeScript modules")
-
     content = "\n".join(path.read_text(encoding="utf-8", errors="ignore") for path in py_files)
     required_concepts = [
         "organization_id", "farm_id", "evidence", "confidence", "approval", "audit",
@@ -246,6 +211,46 @@ def check_protected_baseline() -> None:
     for name in ["MASTER_PLAN.md", "verify_enterprise.py"]:
         if not (ROOT / name).is_file():
             fail(f"protected benchmark file missing: {name}")
+
+
+def _wait_http(url: str, *, contains: str | None = None, attempts: int = 30) -> None:
+    last_error = ""
+    for _ in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=3) as response:
+                body = response.read().decode("utf-8", errors="replace")
+                if response.status < 400 and (contains is None or contains.lower() in body.lower()):
+                    return
+                last_error = f"status={response.status} body={body[:200]}"
+        except (OSError, urllib.error.URLError) as exc:
+            last_error = str(exc)
+        time.sleep(2)
+    fail(f"runtime endpoint did not become ready: {url}: {last_error}")
+
+
+def check_strict_runtime() -> None:
+    if os.environ.get("EVERSTATE_ENTERPRISE_STRICT", "0") != "1":
+        return
+    if shutil.which("docker") is None:
+        fail("strict enterprise runtime gate requires Docker")
+    compose = ["docker", "compose"]
+    config = subprocess.run(compose + ["config", "--quiet"], cwd=ROOT, check=False, capture_output=True, text=True)
+    if config.returncode != 0:
+        fail("docker compose config failed: " + (config.stderr or config.stdout)[-1200:])
+    build = subprocess.run(compose + ["build"], cwd=ROOT, check=False, capture_output=True, text=True, timeout=1800)
+    if build.returncode != 0:
+        fail("docker compose build failed: " + (build.stderr or build.stdout)[-2000:])
+    env = os.environ.copy()
+    env.setdefault("AGRI_CONNECTOR_MODE", "mock")
+    env.setdefault("AGRI_DISABLE_PHYSICAL_ACTIONS", "1")
+    up = subprocess.run(compose + ["up", "-d"], cwd=ROOT, check=False, capture_output=True, text=True, env=env)
+    if up.returncode != 0:
+        fail("docker compose up failed: " + (up.stderr or up.stdout)[-1600:])
+    try:
+        _wait_http("http://127.0.0.1:8000/health")
+        _wait_http("http://127.0.0.1:3000", contains="agricultur")
+    finally:
+        subprocess.run(compose + ["down", "-v", "--remove-orphans"], cwd=ROOT, check=False, capture_output=True, text=True)
 
 
 def run(stage: str) -> None:
@@ -263,11 +268,12 @@ def run(stage: str) -> None:
             fail(f"unknown stage {stage!r}")
         check_files(STAGES[stage])
         check_markers(stage)
-
     check_no_forbidden()
     check_python_compiles()
     check_json_files()
     check_protected_baseline()
+    if stage == "final":
+        check_strict_runtime()
     print(f"PASS: enterprise stage {stage}")
 
 
