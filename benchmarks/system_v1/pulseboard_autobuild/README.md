@@ -1,46 +1,67 @@
 # EVR-SYSTEM-001 — Real Full-System Autobuild
 
-This benchmark is the first end-to-end acceptance run intended to let Everstate coordinate a real project build rather than only verify isolated routing or continuation contracts.
+EVR-SYSTEM-001 is the first from-scratch build benchmark for the complete Everstate execution path. The input workspace contains only protected evidence (`SPEC.md` and `verify.py`). The primary coding agent must create the application and documentation from Everstate state plus repository evidence.
 
-## What it tests
+## What this run exercises
 
-The run uses:
+The first release-significant run uses the full chain:
 
-1. a clean Git workspace,
-2. Everstate canonical project identity/state,
-3. selectable semantic state depth,
-4. configured execution fabrics for AgentCouncil participants,
-5. Ruflo forced as the council orchestrator,
-6. a real multi-round council debate,
-7. a real primary coding-agent handoff that may modify the repository,
-8. canonical-state preservation checks, and
-9. deterministic project verification through `everstate acceptance-evaluate`.
+```text
+SPEC + verifier
+      ↓
+Everstate canonical state (FULL)
+      ↓
+ExecutionFabric participant selection
+      ↓
+Ruflo AgentCouncil (architect + critic + verifier, debate)
+      ↓
+advisory council result
+      ↓
+Everstate continuation packet + advisory result
+      ↓
+Codex Exec (headless, workspace-write sandbox)
+      ↓
+repository changes
+      ↓
+Everstate Git evidence refresh
+      ↓
+deterministic acceptance verifier
+      ↓
+semantic-state / identity checks
+```
 
-The coding agent is not given a second manually rewritten explanation after state seeding. It receives the task through Everstate's continuation/handoff path.
+Ruflo coordinates the council but does not own canonical project truth. Council output is advisory. Everstate remains authoritative for project identity, objective, current task, decisions, constraints, failed attempts, blockers, next action, and acceptance policy.
 
 ## State levels
 
-`minimal`
-: objective + current task + next action.
+- `minimal`: objective, current task, next action.
+- `standard` (alias `guarded` in the wrapper): minimal plus decisions and constraints.
+- `full`: standard plus failed attempts and blockers. **Use this for the first real run.**
+- `critical`: full plus a mandatory independent-council constraint; critical cannot run with the council disabled.
 
-`guarded`
-: minimal plus decisions and active constraints.
-
-`full`
-: guarded plus a known failed attempt and current blocker. This is the release-significant mode for the first real run.
+A full/critical scenario that omits the required semantic fields is rejected during setup rather than silently pretending that state coverage exists.
 
 ## Ubuntu preparation
 
 From the Everstate repository:
 
 ```bash
-git checkout feat/real-system-acceptance
-python -m venv .venv
+git pull origin main
 source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-Install Ruflo if it is not already available:
+Before the PR is merged, use the feature branch instead:
+
+```bash
+git fetch origin
+git checkout feat/real-system-acceptance
+git pull origin feat/real-system-acceptance
+source .venv/bin/activate
+pip install -e '.[dev]'
+```
+
+Ruflo v3 requires Node 20+:
 
 ```bash
 node --version
@@ -48,40 +69,45 @@ npm install -g 'claude-flow@^3'
 everstate ruflo-check
 ```
 
-Configure execution fabrics interactively once:
+Configure the execution fabrics that will supply independent council models:
 
 ```bash
 everstate setup
 ```
 
-For the first full council run, configure enough eligible model targets that this command shows at least two participants:
+The real benchmark defaults to a minimum of two eligible council participants. It fails closed rather than silently calling the run "full-system" with only one reviewer.
 
-```bash
-everstate council "preflight" --path . --dry-run --orchestrator ruflo --json
-```
-
-That particular command requires the current repository itself to be initialized in Everstate. The benchmark runner performs its own equivalent preflight inside the isolated benchmark workspace, so it is fine to skip this manual check.
-
-Make sure the primary coding agent is installed and authenticated. First run target:
+The first verified headless primary-agent path is Codex. Confirm that the CLI is installed and authenticated:
 
 ```bash
 codex --version
+codex login status
 ```
 
-## First real run
+Codex is launched non-interactively through `codex exec` with a workspace-write sandbox and approvals disabled for this isolated benchmark workspace. Everstate does **not** use the deprecated `--full-auto` compatibility flag.
 
-Use a fresh workspace and the full state level:
+## Zero-model preflight
+
+Run this first. It creates a disposable workspace, seeds Everstate state, checks Ruflo and council eligibility, and writes a preview of the primary prompt, but does not call council models and does not launch Codex:
 
 ```bash
-bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh \
+EVERSTATE_REAL_DRY_RUN=1 \
+EVERSTATE_REAL_RESET=1 \
+  bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh \
   "$HOME/everstate-live/EVR-SYSTEM-001" \
   codex \
   full
 ```
 
-The run intentionally fails rather than silently downgrading if Ruflo is unavailable or fewer than two council participants are eligible.
+A successful preflight ends with:
 
-To rerun from a clean copy at the same path:
+```text
+EVR-SYSTEM-001: DRY-RUN READY
+```
+
+## First real run
+
+Then run the exact same mission without the dry-run flag:
 
 ```bash
 EVERSTATE_REAL_RESET=1 \
@@ -91,40 +117,53 @@ EVERSTATE_REAL_RESET=1 \
   full
 ```
 
-## Other primary agents
-
-The same benchmark can be run without changing the canonical mission:
+The wrapper is intentionally thin. The actual orchestration is a first-class Everstate command equivalent to:
 
 ```bash
-bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh /tmp/evr-claude claude full
-bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh /tmp/evr-gemini gemini full
-bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh /tmp/evr-local codex-ollama full
-bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh /tmp/evr-omni codex-omniroute full
+everstate real-accept \
+  --scenario benchmarks/system_v1/pulseboard_autobuild/scenario.json \
+  --template benchmarks/system_v1/pulseboard_autobuild/project \
+  --workspace "$HOME/everstate-live/EVR-SYSTEM-001" \
+  --provider codex \
+  --state-level full \
+  --council required \
+  --orchestrator ruflo \
+  --min-council-agents 2
 ```
 
-## Evidence captured
+## What Pulseboard must build
 
-The workspace retains `.everstate/real-acceptance/` with:
+The coding agent receives an initially clean project containing `SPEC.md` and `verify.py`. It must create:
 
-- Ruflo readiness,
-- council preflight/participants,
-- council result,
-- canonical packet before the coding run,
-- canonical packet after the coding run,
-- status before/after,
-- primary-agent terminal output, and
-- the final JSON acceptance report.
+- `pulseboard.py`
+- `README.md`
 
-The final line is either:
+The resulting CLI must support `add`, `list`, `done`, and `stats`; persist local JSON across separate process runs; preserve monotonically increasing IDs; use atomic replacement for writes; reject invalid IDs/priorities correctly; avoid third-party/network code; and leave `SPEC.md` and `verify.py` untouched.
+
+The deterministic verifier creates fresh temporary databases and exercises multiple transitions, so a hard-coded demonstration cannot pass legitimately.
+
+## Evidence retained
+
+Each run keeps evidence under:
 
 ```text
-EVR-SYSTEM-001: PASS
+<workspace>/.everstate/real-acceptance/
 ```
 
-or:
+Current artifacts include:
 
-```text
-EVR-SYSTEM-001: FAIL
-```
+- `state-before.json`
+- `council-preflight.json`
+- `council-result.json` on a real run
+- `primary-prompt-preview.txt` on dry-run
+- `primary-prompt.txt` on a real run
+- `state-after.json`
+- `acceptance-report.json`
 
-A PASS means the project implementation satisfies the deterministic verifier and the seeded semantic state survived the coding-agent run. It does not by itself prove every external provider is generally reliable; the evidence records which providers/models actually participated in this run.
+The numeric state version is allowed to advance when Everstate observes new repository evidence. Acceptance instead requires that project identity and the seeded semantic truth remain intact.
+
+## Meaning of PASS
+
+A successful real run must satisfy the deterministic project checks, the primary provider must exit successfully, project identity must be unchanged, semantic state must remain preserved, and the resulting state version must be monotonic.
+
+A PASS proves this specific authenticated run and records which orchestration/provider path participated. It does not imply that every external provider or local runtime has been validated; those are tested separately by repeating the same benchmark with the relevant environment.
