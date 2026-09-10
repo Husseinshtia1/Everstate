@@ -30,7 +30,7 @@ def register(app: typer.Typer, service_factory) -> None:
         provider_name: str = typer.Option(
             "codex",
             "--provider",
-            help="Primary coding agent: codex, claude, gemini, codex-ollama, or codex-omniroute.",
+            help="Headless primary coding agent. Codex is the currently verified automation provider.",
         ),
         state_level: StateLevel = typer.Option(StateLevel.FULL, "--state-level"),
         council: CouncilRequirement = typer.Option(CouncilRequirement.REQUIRED, "--council"),
@@ -60,6 +60,11 @@ def register(app: typer.Typer, service_factory) -> None:
             provider = get_provider(provider_name)
         except ValueError as exc:
             raise typer.BadParameter(str(exc), param_hint="--provider") from exc
+        if not provider.automation_supported:
+            raise typer.BadParameter(
+                f"Primary coding provider {provider_name!r} has no verified headless automation contract yet.",
+                param_hint="--provider",
+            )
         if not dry_run and not provider.available():
             raise typer.BadParameter(
                 f"Primary coding provider {provider_name!r} is not installed or configured.",
