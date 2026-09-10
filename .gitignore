@@ -12,6 +12,7 @@ build/
 .idea/
 .vscode/
 .everstate/
+.claude-flow/
 *.db
 *.db-shm
 *.db-wal

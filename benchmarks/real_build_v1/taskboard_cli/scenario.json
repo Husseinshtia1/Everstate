@@ -1,0 +1,45 @@
+{
+  "name": "EVR-REAL-001 Taskboard CLI autonomous build",
+  "objective": "Build a reliable local-first taskboard CLI from the provided incomplete starter while preserving the acceptance policy.",
+  "current_task": "Implement taskboard.py so users can add, list, and complete tasks with durable JSON persistence and correct error handling.",
+  "decisions": [
+    "Use Python standard library only.",
+    "Use the TASKBOARD_FILE environment variable when present and .taskboard.json otherwise.",
+    "Task IDs are positive sequential integers that continue across process restarts.",
+    "The existing acceptance tests are authoritative and must not be weakened."
+  ],
+  "constraints": [
+    "Do not modify POLICY.md.",
+    "Do not modify acceptance_test.py.",
+    "Do not use network access or external dependencies.",
+    "Do not use SQLite or another database.",
+    "Invalid input must never corrupt existing JSON task data."
+  ],
+  "failed_attempts": [
+    "A previous stub left persistence methods as NotImplementedError; do not paper over failures by changing tests."
+  ],
+  "blockers": [
+    "The starter implementation is intentionally incomplete and all acceptance tests fail until the CLI is implemented."
+  ],
+  "next_action": "Inspect taskboard.py, POLICY.md, and acceptance_test.py; implement the CLI completely; run python -m unittest -v acceptance_test.py before finishing.",
+  "required_changed_files": [
+    "taskboard.py"
+  ],
+  "protected_files": [
+    "POLICY.md",
+    "acceptance_test.py"
+  ],
+  "forbidden_substrings": {
+    "taskboard.py": [
+      "import sqlite3",
+      "import requests",
+      "import subprocess"
+    ]
+  },
+  "validation_commands": [
+    {
+      "command": ["python", "-m", "unittest", "-v", "acceptance_test.py"],
+      "expected_exit": 0
+    }
+  ]
+}

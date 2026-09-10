@@ -1,0 +1,5 @@
+.everstate/
+.claude-flow/
+__pycache__/
+*.pyc
+.taskboard.json

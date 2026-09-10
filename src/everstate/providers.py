@@ -38,6 +38,8 @@ class ProviderAdapter:
     handoff_slug: str | None = None
     model_flag: str = "-m"
     prompt_separator: tuple[str, ...] = ()
+    automation_args: tuple[str, ...] | None = None
+    automation_probe_args: tuple[str, ...] | None = None
 
     def resolve_executable(self) -> str | None:
         on_path = shutil.which(self.executable)
@@ -51,6 +53,34 @@ class ProviderAdapter:
 
     def available(self) -> bool:
         return self.resolve_executable() is not None
+
+    @property
+    def automation_supported(self) -> bool:
+        return self.automation_args is not None
+
+    def automation_preflight(self, timeout: float = 10.0) -> tuple[bool, str]:
+        """Validate a headless provider without sending an inference request."""
+        if not self.automation_supported:
+            return False, f"{self.name} has no verified non-interactive automation contract."
+        executable = self.resolve_executable()
+        if executable is None:
+            return False, f"{self.executable!r} is not installed or not executable."
+        if self.automation_probe_args is None:
+            return True, f"{self.name} executable is available."
+        try:
+            completed = subprocess.run(
+                [executable, *self.automation_probe_args],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"{self.name} readiness probe failed: {exc}"
+        detail = (completed.stdout or completed.stderr).strip()
+        if completed.returncode != 0:
+            return False, detail or f"{self.name} readiness probe exited {completed.returncode}."
+        return True, detail or f"{self.name} headless automation is ready."
 
     def selected_model(self) -> str | None:
         if self.model_env:
@@ -70,6 +100,13 @@ class ProviderAdapter:
     def interactive_command(self, prompt: str) -> list[str]:
         return [self.resolve_executable() or self.executable, *self.effective_prompt_args(), prompt]
 
+    def automation_command(self, prompt: str) -> list[str]:
+        if self.automation_args is None:
+            raise RuntimeError(
+                f"{self.name} does not yet have a verified non-interactive automation contract in Everstate."
+            )
+        return [self.resolve_executable() or self.executable, *self.automation_args, prompt]
+
     def launch(self, root: Path, prompt: str) -> int:
         executable = self.resolve_executable()
         if executable is None:
@@ -84,6 +121,18 @@ class ProviderAdapter:
         )
         return completed.returncode
 
+    def launch_automated(self, root: Path, prompt: str) -> int:
+        executable = self.resolve_executable()
+        if executable is None:
+            raise FileNotFoundError(
+                f"{self.executable!r} is not available. Everstate checked PATH and common user install locations. "
+                f"Install or configure {self.name}, or set EVERSTATE_{self.executable.upper()}_BIN."
+            )
+        command = self.automation_command(prompt)
+        command[0] = executable
+        completed = subprocess.run(command, cwd=root.resolve(), check=False)
+        return completed.returncode
+
     @property
     def handoff_name(self) -> str:
         return self.handoff_slug or self.executable
@@ -91,7 +140,24 @@ class ProviderAdapter:
 
 PROVIDERS: dict[str, ProviderAdapter] = {
     "claude": ProviderAdapter(name="Claude Code", executable="claude"),
-    "codex": ProviderAdapter(name="Codex", executable="codex"),
+    "codex": ProviderAdapter(
+        name="Codex",
+        executable="codex",
+        # Current Codex exposes non-interactive execution through `codex exec`.
+        # Keep the benchmark sandboxed and remove approval prompts explicitly
+        # through config overrides instead of relying on legacy convenience flags.
+        automation_args=(
+            "-c",
+            'approval_policy="never"',
+            "-c",
+            "sandbox_workspace_write.network_access=false",
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--ephemeral",
+        ),
+        automation_probe_args=("login", "status"),
+    ),
     "gemini": ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",)),
     "codex-ollama": ProviderAdapter(
         name="Codex + Ollama (local)",
