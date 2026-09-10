@@ -66,12 +66,37 @@ def prepare_workspace(template: Path, workspace: Path) -> Path:
     return workspace
 
 
+def _validate_state_level(scenario: ContinuityScenario, level: StateLevel) -> None:
+    missing: list[str] = []
+    if not scenario.objective.strip():
+        missing.append("objective")
+    if not scenario.current_task.strip():
+        missing.append("current_task")
+    if not scenario.next_action.strip():
+        missing.append("next_action")
+    if level in {StateLevel.STANDARD, StateLevel.FULL, StateLevel.CRITICAL}:
+        if not scenario.decisions:
+            missing.append("decisions")
+        if not scenario.constraints:
+            missing.append("constraints")
+    if level in {StateLevel.FULL, StateLevel.CRITICAL}:
+        if not scenario.failed_attempts:
+            missing.append("failed_attempts")
+        if not scenario.blockers:
+            missing.append("blockers")
+    if missing:
+        raise ValueError(
+            f"Scenario does not satisfy {level.value} state level; missing: {', '.join(missing)}"
+        )
+
+
 def seed_state(
     service: EverstateService,
     root: Path,
     scenario: ContinuityScenario,
     level: StateLevel,
 ) -> None:
+    _validate_state_level(scenario, level)
     service.init_project(root)
     service.set_objective(root, scenario.objective)
     service.set_task(root, scenario.current_task)
@@ -307,6 +332,17 @@ def _write_json(path: Path, payload: object) -> None:
     )
 
 
+def _launch_primary(provider: ProviderAdapter, root: Path, prompt: str) -> int:
+    launch_automated = getattr(provider, "launch_automated", None)
+    if callable(launch_automated):
+        if hasattr(provider, "automation_supported") and not provider.automation_supported:
+            raise RuntimeError(
+                f"{provider.name} is installed but Everstate has no verified headless automation contract for it."
+            )
+        return launch_automated(root, prompt)
+    return provider.launch(root, prompt)
+
+
 def run_real_acceptance(
     *,
     service: EverstateService,
@@ -416,7 +452,7 @@ def run_real_acceptance(
     )
     (artifacts / "primary-prompt.txt").write_text(prompt, encoding="utf-8")
 
-    returncode = provider.launch(root, prompt)
+    returncode = _launch_primary(provider, root, prompt)
     after = service.continuation_packet(root)
     _write_json(artifacts / "state-after.json", after.model_dump(mode="json"))
 
