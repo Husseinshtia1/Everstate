@@ -54,12 +54,15 @@ def test_parallel_review_creates_star_swarm_and_roles(monkeypatch, tmp_path: Pat
     )
 
     assert run.topology == "star"
-    assert run.strategy == "parallel"
+    assert run.strategy == "analysis"
+    assert run.task_strategy == "analysis"
     assert calls[0][:2] == ("swarm", "init")
     assert ("--topology", "star") == (calls[0][2], calls[0][3])
+    assert calls[0][calls[0].index("--strategy") + 1] == "analysis"
     assert calls[1][:2] == ("agent", "spawn")
     assert calls[2][:2] == ("agent", "spawn")
     assert calls[-1][:2] == ("task", "orchestrate")
+    assert calls[-1][calls[-1].index("--strategy") + 1] == "analysis"
     assert "Ship the migration?" in calls[-1][calls[-1].index("--task") + 1]
 
 
@@ -79,6 +82,7 @@ def test_debate_uses_mesh_and_balanced_strategy(monkeypatch, tmp_path: Path) -> 
 
     assert run.topology == "mesh"
     assert run.strategy == "balanced"
+    assert run.task_strategy == "balanced"
     assert "--priority" in calls[-1]
     assert calls[-1][calls[-1].index("--priority") + 1] == "high"
 
