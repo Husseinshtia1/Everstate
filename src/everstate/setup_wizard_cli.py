@@ -37,6 +37,22 @@ def _install_freellmapi() -> tuple[bool, str]:
     return True, "FreeLLMAPI installer completed."
 
 
+def _install_ruflo() -> tuple[bool, str]:
+    if shutil.which("npm") is None:
+        return False, "Ruflo requires Node.js 20+ with npm; npm was not found on PATH."
+    completed = subprocess.run(
+        ["npm", "install", "-g", "claude-flow@^3"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip().splitlines()
+        suffix = f" Last output: {detail[-1]}" if detail else ""
+        return False, f"Ruflo/claude-flow installer exited with code {completed.returncode}.{suffix}"
+    return True, "Ruflo/claude-flow v3 installer completed."
+
+
 def _policy_prompt(default: str = "auto") -> str:
     console.print("\n[bold]Execution policy[/bold]")
     console.print("  [cyan]1[/cyan] Automatic (recommended): local → free remote → cloud")
@@ -51,11 +67,16 @@ def _effective_value(env_name: str, saved: str) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else saved
 
 
+def _free_needs_credentials(health: FabricHealth) -> bool:
+    detail = health.detail.lower()
+    return "http 401" in detail or "unauthorized" in detail or "bearer" in detail
+
+
 def register(app: typer.Typer) -> None:
     @app.command("setup")
     def setup(
         yes: bool = typer.Option(False, "--yes", "-y", help="Accept recommended choices without interactive prompts."),
-        install_missing: bool = typer.Option(False, "--install-missing", help="Install FreeLLMAPI automatically when missing."),
+        install_missing: bool = typer.Option(False, "--install-missing", help="Install supported missing local services such as FreeLLMAPI and Ruflo."),
         freellmapi_token: str | None = typer.Option(None, "--freellmapi-token", help="Unified FreeLLMAPI token; stored in the 0600 Everstate execution config."),
         no_browser: bool = typer.Option(False, "--no-browser", help="Do not open the FreeLLMAPI dashboard when a token/provider setup is needed."),
     ) -> None:
@@ -97,7 +118,7 @@ def register(app: typer.Typer) -> None:
 
         if not free_health.ready:
             should_install = install_missing or (not yes and typer.confirm("FreeLLMAPI is not ready. Install/configure it automatically?", default=True))
-            if should_install:
+            if should_install and not _free_needs_credentials(free_health):
                 installed, detail = _install_freellmapi()
                 console.print(f"[{'green' if installed else 'yellow'}]{detail}[/]")
                 if installed:
@@ -105,7 +126,13 @@ def register(app: typer.Typer) -> None:
                         lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=effective_free_token))
                     )
 
-        if not free_health.ready and "401" in free_health.detail:
+        if not ruflo_health.ready and install_missing:
+            installed, detail = _install_ruflo()
+            console.print(f"[{'green' if installed else 'yellow'}]{detail}[/]")
+            if installed:
+                ruflo_health = RufloOrchestrator().health()
+
+        if not free_health.ready and _free_needs_credentials(free_health):
             if effective_free_token is None and not yes:
                 if not no_browser:
                     webbrowser.open("http://127.0.0.1:3001")
@@ -116,6 +143,12 @@ def register(app: typer.Typer) -> None:
                 effective_free_token = typer.prompt("FreeLLMAPI unified token", hide_input=True).strip() or None
                 free_health = _probe(
                     lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=effective_free_token))
+                )
+            elif effective_free_token is None:
+                console.print(
+                    "[yellow]FreeLLMAPI ACTION_REQUIRED: the router is running, but /v1 requires a unified API key. "
+                    "Open http://127.0.0.1:3001, add at least one provider key on Keys, copy the unified API key, "
+                    "then rerun `everstate setup --freellmapi-token <TOKEN> --yes --no-browser`.[/yellow]"
                 )
 
         policy = current.policy if yes else _policy_prompt(current.policy)
@@ -152,7 +185,10 @@ def register(app: typer.Typer) -> None:
         console.print(f"Policy: [cyan]{policy}[/cyan]")
         console.print(f"Config: {path}")
         console.print(f"Ypipe: {final_ypipe.status}")
-        console.print(f"FreeLLMAPI: {final_free.status}")
+        if _free_needs_credentials(final_free):
+            console.print("FreeLLMAPI: ACTION_REQUIRED (router running; configure provider key + unified API key)")
+        else:
+            console.print(f"FreeLLMAPI: {final_free.status}")
         console.print(f"OmniRoute: {final_omni.status}")
         console.print(f"Ruflo orchestration: {'READY ' + (final_ruflo.version or '') if final_ruflo.ready else 'UNAVAILABLE'}")
 
@@ -164,7 +200,13 @@ def register(app: typer.Typer) -> None:
             raise typer.Exit(code=2)
 
         if not any(health.ready for health in (final_ypipe, final_free, final_omni)):
-            console.print("[yellow]Configuration was saved, but no execution fabric is ready yet.[/yellow]")
+            if _free_needs_credentials(final_free):
+                console.print(
+                    "[yellow]No execution fabric is ready yet. FreeLLMAPI is installed and reachable but needs credentials. "
+                    "Configure provider keys in its local dashboard and save the unified API key in Everstate.[/yellow]"
+                )
+            else:
+                console.print("[yellow]Configuration was saved, but no execution fabric is ready yet.[/yellow]")
             raise typer.Exit(code=2)
 
         if not final_ruflo.ready:

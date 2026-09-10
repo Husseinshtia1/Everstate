@@ -10,6 +10,33 @@ from pathlib import Path
 _VALID_POLICIES = {"auto", "local-only", "cloud-allowed", "cloud-preferred"}
 
 
+def normalize_bearer_token(value: str | None) -> str | None:
+    """Normalize and validate an HTTP Bearer token before persistence/use.
+
+    urllib/http.client encodes HTTP header values as latin-1. Provider tokens are
+    expected to be printable ASCII without whitespace. Reject placeholders,
+    pasted prose, and invisible/non-ASCII characters with an actionable error
+    instead of surfacing a low-level codec exception during a health probe.
+    """
+    if value is None:
+        return None
+    token = value.strip()
+    if not token:
+        return None
+    if any(char.isspace() for char in token):
+        raise ValueError("FreeLLMAPI unified API key must not contain whitespace")
+    try:
+        token.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError(
+            "FreeLLMAPI unified API key must contain ASCII characters only; "
+            "copy the actual Unified API key from the FreeLLMAPI Keys page, not placeholder text"
+        ) from exc
+    if any(ord(char) < 0x21 or ord(char) > 0x7E for char in token):
+        raise ValueError("FreeLLMAPI unified API key contains invalid control characters")
+    return token
+
+
 @dataclass(frozen=True)
 class ExecutionSettings:
     policy: str = "auto"
@@ -51,13 +78,20 @@ def _settings_from_mapping(raw: dict) -> ExecutionSettings:
     policy = _string(raw.get("policy"), defaults.policy).lower()
     if policy not in _VALID_POLICIES:
         policy = defaults.policy
+    persisted_token = _optional_string(raw.get("freellmapi_api_key"), defaults.freellmapi_api_key)
+    try:
+        persisted_token = normalize_bearer_token(persisted_token)
+    except ValueError:
+        # Legacy/bad values must never make HTTP header construction crash.
+        # Treat them as absent so setup can request a corrected token.
+        persisted_token = None
     return ExecutionSettings(
         policy=policy,
         ypipe_enabled=_bool(raw.get("ypipe_enabled"), defaults.ypipe_enabled),
         ypipe_url=_string(raw.get("ypipe_url"), defaults.ypipe_url),
         freellmapi_enabled=_bool(raw.get("freellmapi_enabled"), defaults.freellmapi_enabled),
         freellmapi_url=_string(raw.get("freellmapi_url"), defaults.freellmapi_url),
-        freellmapi_api_key=_optional_string(raw.get("freellmapi_api_key"), defaults.freellmapi_api_key),
+        freellmapi_api_key=persisted_token,
         omniroute_enabled=_bool(raw.get("omniroute_enabled"), defaults.omniroute_enabled),
         omniroute_url=_string(raw.get("omniroute_url"), defaults.omniroute_url),
     )
@@ -132,6 +166,17 @@ def private_file_permissions_enforced(path: Path) -> bool:
 
 
 def save_execution_settings(settings: ExecutionSettings) -> Path:
+    normalized_token = normalize_bearer_token(settings.freellmapi_api_key)
+    settings = ExecutionSettings(
+        policy=settings.policy,
+        ypipe_enabled=settings.ypipe_enabled,
+        ypipe_url=settings.ypipe_url,
+        freellmapi_enabled=settings.freellmapi_enabled,
+        freellmapi_url=settings.freellmapi_url,
+        freellmapi_api_key=normalized_token,
+        omniroute_enabled=settings.omniroute_enabled,
+        omniroute_url=settings.omniroute_url,
+    )
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
