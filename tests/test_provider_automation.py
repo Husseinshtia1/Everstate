@@ -9,14 +9,19 @@ def test_codex_automation_uses_current_noninteractive_workspace_write_contract()
 
     assert command[0].endswith("codex")
     assert command[1:] == [
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        "sandbox_workspace_write.network_access=false",
         "exec",
         "--sandbox",
         "workspace-write",
-        "--ask-for-approval",
-        "never",
+        "--ephemeral",
         "build the project",
     ]
     assert "--full-auto" not in command
+    assert "--ask-for-approval" not in command
+    assert "--dangerously-bypass-approvals-and-sandbox" not in command
 
 
 def test_interactive_only_providers_are_not_silently_treated_as_automatable() -> None:
