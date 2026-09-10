@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -103,22 +104,31 @@ def test_local_only_never_sends_human_question_to_ruflo(monkeypatch, tmp_path: P
     assert run.redacted_for_local_only is True
 
 
-def test_ruflo_never_receives_provider_credentials(monkeypatch, tmp_path: Path) -> None:
+def test_ruflo_subprocess_environment_excludes_provider_credentials(monkeypatch, tmp_path: Path) -> None:
     orchestrator = RufloOrchestrator(RufloConfig(command=("claude-flow",)))
-    monkeypatch.setattr(orchestrator, "health", lambda: RufloHealth(True, "3.41.1", "ready"))
-    calls: list[tuple[str, ...]] = []
-    monkeypatch.setattr(orchestrator, "_run", lambda *args, **kwargs: calls.append(tuple(args)) or "ok")
-    monkeypatch.setenv("EVERSTATE_FREELLMAPI_API_KEY", "super-secret-token")
+    monkeypatch.setenv("EVERSTATE_FREELLMAPI_API_KEY", "everstate-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+    monkeypatch.setenv("CLAUDE_FLOW_MODE", "coordination")
+    monkeypatch.setenv("CLAUDE_FLOW_API_TOKEN", "ruflo-secret")
+    seen: dict[str, object] = {}
 
-    orchestrator.prepare_council(
-        root=tmp_path,
-        packet=ContinuationPacket(project_id="proj_demo", state_version=3),
-        question="Review API design",
-        participants=(participant("architect"),),
-        mode=CouncilMode.PARALLEL_REVIEW,
-    )
+    def fake_run(command, **kwargs):
+        seen["command"] = command
+        seen["env"] = kwargs["env"]
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
-    assert "super-secret-token" not in "\n".join(" ".join(call) for call in calls)
+    monkeypatch.setattr("everstate.ruflo_orchestrator.subprocess.run", fake_run)
+    orchestrator._run("swarm", "init", cwd=tmp_path)
+
+    child_env = seen["env"]
+    assert isinstance(child_env, dict)
+    assert "EVERSTATE_FREELLMAPI_API_KEY" not in child_env
+    assert "OPENAI_API_KEY" not in child_env
+    assert "ANTHROPIC_API_KEY" not in child_env
+    assert "CLAUDE_FLOW_API_TOKEN" not in child_env
+    assert child_env["CLAUDE_FLOW_MODE"] == "coordination"
+    assert "everstate-secret" not in " ".join(seen["command"])
 
 
 def test_verify_result_preserves_everstate_authority() -> None:
