@@ -31,6 +31,7 @@ class RufloRun:
     version: str | None
     topology: str
     strategy: str
+    task_strategy: str
     agents: tuple[str, ...]
     task_registered: bool
     redacted_for_local_only: bool
@@ -103,8 +104,6 @@ class RufloOrchestrator:
     def _child_env() -> dict[str, str]:
         source = os.environ
         child = {key: value for key, value in source.items() if key.upper() in _SAFE_ENV_KEYS}
-        # Explicit Ruflo configuration may be forwarded only when it does not
-        # look credential-bearing. Provider/API credentials are never inherited.
         for key, value in source.items():
             upper = key.upper()
             if not (upper.startswith("RUFLO_") or upper.startswith("CLAUDE_FLOW_")):
@@ -180,7 +179,10 @@ class RufloOrchestrator:
 
         local_only = constraints_require_local(packet.constraints)
         topology = "mesh" if mode is CouncilMode.DEBATE else "star"
-        strategy = "balanced" if mode is CouncilMode.DEBATE else "parallel"
+        swarm_strategy = "balanced" if mode is CouncilMode.DEBATE else "parallel"
+        # Ruflo v3.41 separates swarm execution strategy from task routing
+        # strategy. `parallel` is valid for swarm init but not task orchestrate.
+        task_strategy = "balanced" if mode is CouncilMode.DEBATE else "analysis"
         self._run(
             "swarm",
             "init",
@@ -189,7 +191,7 @@ class RufloOrchestrator:
             "--max-agents",
             str(len(people)),
             "--strategy",
-            strategy,
+            swarm_strategy,
             cwd=root,
         )
 
@@ -207,8 +209,6 @@ class RufloOrchestrator:
             )
             spawned.append(participant.role)
 
-        # In sovereignty modes, do not pass the human question to the external
-        # coordinator. Ruflo still coordinates local roles using opaque state identity.
         if local_only:
             task_text = (
                 f"Everstate council coordination for {packet.project_id}@{packet.state_version}; "
@@ -225,7 +225,7 @@ class RufloOrchestrator:
             "--task",
             task_text,
             "--strategy",
-            strategy,
+            task_strategy,
             "--priority",
             "high" if mode is CouncilMode.DEBATE else "medium",
             cwd=root,
@@ -234,7 +234,8 @@ class RufloOrchestrator:
             enabled=True,
             version=health.version,
             topology=topology,
-            strategy=strategy,
+            strategy=swarm_strategy,
+            task_strategy=task_strategy,
             agents=tuple(spawned),
             task_registered=True,
             redacted_for_local_only=local_only,
