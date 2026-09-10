@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
@@ -11,6 +10,7 @@ from everstate.acceptance import ContinuityScenario
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK = ROOT / "benchmarks" / "system_v1" / "pulseboard_autobuild"
+TEMPLATE = BENCHMARK / "project"
 
 REFERENCE_APP = r'''from __future__ import annotations
 
@@ -115,8 +115,8 @@ if __name__ == "__main__":
 
 
 def _workspace(tmp_path: Path) -> Path:
-    shutil.copy(BENCHMARK / "verify.py", tmp_path / "verify.py")
-    shutil.copy(BENCHMARK / "SPEC.md", tmp_path / "SPEC.md")
+    shutil.copy(TEMPLATE / "verify.py", tmp_path / "verify.py")
+    shutil.copy(TEMPLATE / "SPEC.md", tmp_path / "SPEC.md")
     (tmp_path / "pulseboard.py").write_text(REFERENCE_APP, encoding="utf-8")
     (tmp_path / "README.md").write_text(
         "Pulseboard is local JSON task storage. Usage: add, list, done, stats.\n",
@@ -148,7 +148,7 @@ def test_real_system_verifier_accepts_known_good_reference(tmp_path: Path) -> No
 
 
 def test_real_system_verifier_rejects_missing_application(tmp_path: Path) -> None:
-    shutil.copy(BENCHMARK / "verify.py", tmp_path / "verify.py")
+    shutil.copy(TEMPLATE / "verify.py", tmp_path / "verify.py")
     result = subprocess.run(
         [sys.executable, "verify.py"],
         cwd=tmp_path,
