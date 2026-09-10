@@ -105,7 +105,7 @@ def register(app: typer.Typer) -> None:
         table.add_column("Ready")
         table.add_column("Endpoint / Version")
         table.add_row("Ypipe", "LOCAL_SOVEREIGN", ypipe_health.status, str(ypipe_health.ready), ypipe_url)
-        table.add_row("FreeLLMAPI", "FREE_REMOTE", ypipe_health.status if False else free_health.status, str(free_health.ready), free_url)
+        table.add_row("FreeLLMAPI", "FREE_REMOTE", free_health.status, str(free_health.ready), free_url)
         table.add_row("OmniRoute", "REMOTE_MULTI_PROVIDER", omni_health.status, str(omni_health.ready), omni_url)
         table.add_row(
             "Ruflo",
