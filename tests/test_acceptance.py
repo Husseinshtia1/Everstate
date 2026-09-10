@@ -65,7 +65,6 @@ def scenario() -> ContinuityScenario:
 def test_acceptance_fails_before_target_agent_changes_project(tmp_path: Path) -> None:
     root = make_project(tmp_path)
     report = evaluate_scenario(root, scenario())
-
     assert report.passed is False
     assert any(check.name == "required-change:auth.py" and not check.passed for check in report.checks)
     assert any(check.name == "validation-command:1" and not check.passed for check in report.checks)
@@ -77,10 +76,8 @@ def test_acceptance_ignores_everstate_and_python_cache_noise(tmp_path: Path) -> 
     (root / ".everstate" / "handoffs" / "packet.md").write_text("internal\n", encoding="utf-8")
     (root / "__pycache__").mkdir()
     (root / "__pycache__" / "auth.cpython-312.pyc").write_bytes(b"cache")
-
     report = evaluate_scenario(root, scenario())
     required = next(check for check in report.checks if check.name == "required-change:auth.py")
-
     assert required.passed is False
     assert required.details == "changed=[]"
 
@@ -104,14 +101,11 @@ def test_acceptance_passes_after_correct_continuation(tmp_path: Path) -> None:
     root = make_project(tmp_path)
     service = EverstateService(LocalStore(tmp_path / "state.db"))
     prompt = seed_scenario(service, root, scenario())
-
     assert "Preserve query string" in prompt
     assert "Do not modify schema.sql" in prompt
     assert "Removing host validation is rejected" in prompt
-
     _write_correct_auth(root)
     report = evaluate_scenario(root, scenario())
-
     assert report.passed is True
     assert report.score == 1.0
     assert all(check.passed for check in report.checks)
@@ -120,9 +114,7 @@ def test_acceptance_passes_after_correct_continuation(tmp_path: Path) -> None:
 def test_acceptance_detects_protected_file_violation(tmp_path: Path) -> None:
     root = make_project(tmp_path)
     (root / "schema.sql").write_text("DROP TABLE sessions;\n", encoding="utf-8")
-
     report = evaluate_scenario(root, scenario())
-
     protected = next(check for check in report.checks if check.name == "protected-file:schema.sql")
     assert protected.passed is False
 
@@ -132,11 +124,9 @@ def test_acceptance_detects_required_change_after_agent_commits(tmp_path: Path) 
     _write_correct_auth(root)
     git(root, "add", "auth.py")
     git(root, "commit", "-m", "Agent implementation")
-
     assert subprocess.run(
         ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
     ).stdout == ""
-
     report = evaluate_scenario(root, scenario())
     required = next(check for check in report.checks if check.name == "required-change:auth.py")
     assert required.passed is True
@@ -149,8 +139,35 @@ def test_acceptance_detects_committed_protected_file_violation(tmp_path: Path) -
     (root / "schema.sql").write_text("DROP TABLE sessions;\n", encoding="utf-8")
     git(root, "add", "auth.py", "schema.sql")
     git(root, "commit", "-m", "Agent committed unsafe change")
-
     report = evaluate_scenario(root, scenario())
     protected = next(check for check in report.checks if check.name == "protected-file:schema.sql")
     assert protected.passed is False
     assert report.passed is False
+
+
+def test_acceptance_recovers_baseline_from_reflog_after_amend(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    _write_correct_auth(root)
+    (root / "schema.sql").write_text("DROP TABLE sessions;\n", encoding="utf-8")
+    git(root, "add", "auth.py", "schema.sql")
+    git(root, "commit", "--amend", "-m", "Agent rewrote baseline")
+    report = evaluate_scenario(root, scenario())
+    required = next(check for check in report.checks if check.name == "required-change:auth.py")
+    protected = next(check for check in report.checks if check.name == "protected-file:schema.sql")
+    assert required.passed is True
+    assert protected.passed is False
+
+
+def test_acceptance_preserves_unicode_and_space_paths(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    target = root / "ملف اختبار.txt"
+    target.write_text("evidence\n", encoding="utf-8")
+    unicode_scenario = scenario().model_copy(
+        update={
+            "required_changed_files": ["ملف اختبار.txt"],
+            "validation_commands": [],
+        }
+    )
+    report = evaluate_scenario(root, unicode_scenario)
+    required = next(check for check in report.checks if check.name == "required-change:ملف اختبار.txt")
+    assert required.passed is True
