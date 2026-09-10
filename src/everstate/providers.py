@@ -38,6 +38,7 @@ class ProviderAdapter:
     handoff_slug: str | None = None
     model_flag: str = "-m"
     prompt_separator: tuple[str, ...] = ()
+    automation_args: tuple[str, ...] | None = None
 
     def resolve_executable(self) -> str | None:
         on_path = shutil.which(self.executable)
@@ -51,6 +52,10 @@ class ProviderAdapter:
 
     def available(self) -> bool:
         return self.resolve_executable() is not None
+
+    @property
+    def automation_supported(self) -> bool:
+        return self.automation_args is not None
 
     def selected_model(self) -> str | None:
         if self.model_env:
@@ -70,6 +75,13 @@ class ProviderAdapter:
     def interactive_command(self, prompt: str) -> list[str]:
         return [self.resolve_executable() or self.executable, *self.effective_prompt_args(), prompt]
 
+    def automation_command(self, prompt: str) -> list[str]:
+        if self.automation_args is None:
+            raise RuntimeError(
+                f"{self.name} does not yet have a verified non-interactive automation contract in Everstate."
+            )
+        return [self.resolve_executable() or self.executable, *self.automation_args, prompt]
+
     def launch(self, root: Path, prompt: str) -> int:
         executable = self.resolve_executable()
         if executable is None:
@@ -84,6 +96,18 @@ class ProviderAdapter:
         )
         return completed.returncode
 
+    def launch_automated(self, root: Path, prompt: str) -> int:
+        executable = self.resolve_executable()
+        if executable is None:
+            raise FileNotFoundError(
+                f"{self.executable!r} is not available. Everstate checked PATH and common user install locations. "
+                f"Install or configure {self.name}, or set EVERSTATE_{self.executable.upper()}_BIN."
+            )
+        command = self.automation_command(prompt)
+        command[0] = executable
+        completed = subprocess.run(command, cwd=root.resolve(), check=False)
+        return completed.returncode
+
     @property
     def handoff_name(self) -> str:
         return self.handoff_slug or self.executable
@@ -91,7 +115,11 @@ class ProviderAdapter:
 
 PROVIDERS: dict[str, ProviderAdapter] = {
     "claude": ProviderAdapter(name="Claude Code", executable="claude"),
-    "codex": ProviderAdapter(name="Codex", executable="codex"),
+    "codex": ProviderAdapter(
+        name="Codex",
+        executable="codex",
+        automation_args=("exec", "--full-auto"),
+    ),
     "gemini": ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",)),
     "codex-ollama": ProviderAdapter(
         name="Codex + Ollama (local)",
