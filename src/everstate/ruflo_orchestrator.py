@@ -59,16 +59,60 @@ class RufloConfig:
         return cls(command=command, timeout_seconds=max(1.0, min(timeout, 300.0)))
 
 
+_SAFE_ENV_KEYS = {
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "TMP",
+    "TEMP",
+    "TMPDIR",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "NODE_PATH",
+    "NPM_CONFIG_PREFIX",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+}
+
+
 class RufloOrchestrator:
     """Local process adapter for Ruflo/claude-flow v3 swarm coordination.
 
     Ruflo coordinates agent roles and task topology only. Everstate remains the
     canonical state authority and continues to execute/verify model calls via
-    ExecutionFabric. No provider credentials are passed to Ruflo by this adapter.
+    ExecutionFabric. Provider credentials are intentionally excluded from the
+    Ruflo subprocess environment.
     """
 
     def __init__(self, config: RufloConfig | None = None):
         self.config = config or RufloConfig.from_env()
+
+    @staticmethod
+    def _child_env() -> dict[str, str]:
+        source = os.environ
+        child = {key: value for key, value in source.items() if key.upper() in _SAFE_ENV_KEYS}
+        # Explicit Ruflo configuration may be forwarded only when it does not
+        # look credential-bearing. Provider/API credentials are never inherited.
+        for key, value in source.items():
+            upper = key.upper()
+            if not (upper.startswith("RUFLO_") or upper.startswith("CLAUDE_FLOW_")):
+                continue
+            if any(token in upper for token in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")):
+                continue
+            child[key] = value
+        return child
 
     def _run(self, *args: str, cwd: Path | None = None) -> str:
         if not self.config.command:
@@ -81,7 +125,7 @@ class RufloOrchestrator:
                 capture_output=True,
                 timeout=self.config.timeout_seconds,
                 check=False,
-                env=os.environ.copy(),
+                env=self._child_env(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RufloError(f"Ruflo command failed to start: {exc}") from exc
@@ -97,10 +141,10 @@ class RufloOrchestrator:
             output = self._run("--version")
         except RufloError as exc:
             return RufloHealth(False, None, str(exc))
-        match = re.search(r"\b(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?\b", output)
+        match = re.search(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?", output, flags=re.IGNORECASE)
         if not match:
             return RufloHealth(False, None, f"Could not parse Ruflo version from: {output[:120]}")
-        version = match.group(0)
+        version = ".".join(match.group(index) for index in (1, 2, 3))
         if int(match.group(1)) < 3:
             return RufloHealth(False, version, "Everstate requires Ruflo/claude-flow v3 or newer")
         return RufloHealth(True, version, "Ruflo v3 orchestration ready")
@@ -163,7 +207,7 @@ class RufloOrchestrator:
             )
             spawned.append(participant.role)
 
-        # In sovereignty modes, do not pass the human question to an external
+        # In sovereignty modes, do not pass the human question to the external
         # coordinator. Ruflo still coordinates local roles using opaque state identity.
         if local_only:
             task_text = (
