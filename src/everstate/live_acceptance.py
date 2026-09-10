@@ -320,6 +320,11 @@ def run_real_acceptance(
     min_council_agents: int = 2,
     dry_run: bool = False,
 ) -> RealAcceptanceRun:
+    if state_level is StateLevel.CRITICAL and not require_council:
+        raise ValueError("critical state level requires independent council review")
+    if min_council_agents < 1 or min_council_agents > 3:
+        raise ValueError("min_council_agents must be between 1 and 3")
+
     root = prepare_workspace(template, workspace)
     seed_state(service, root, scenario, state_level)
     before = service.continuation_packet(root)
