@@ -39,6 +39,7 @@ class ProviderAdapter:
     model_flag: str = "-m"
     prompt_separator: tuple[str, ...] = ()
     automation_args: tuple[str, ...] | None = None
+    automation_probe_args: tuple[str, ...] | None = None
 
     def resolve_executable(self) -> str | None:
         on_path = shutil.which(self.executable)
@@ -56,6 +57,30 @@ class ProviderAdapter:
     @property
     def automation_supported(self) -> bool:
         return self.automation_args is not None
+
+    def automation_preflight(self, timeout: float = 10.0) -> tuple[bool, str]:
+        """Validate a headless provider without sending an inference request."""
+        if not self.automation_supported:
+            return False, f"{self.name} has no verified non-interactive automation contract."
+        executable = self.resolve_executable()
+        if executable is None:
+            return False, f"{self.executable!r} is not installed or not executable."
+        if self.automation_probe_args is None:
+            return True, f"{self.name} executable is available."
+        try:
+            completed = subprocess.run(
+                [executable, *self.automation_probe_args],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"{self.name} readiness probe failed: {exc}"
+        detail = (completed.stdout or completed.stderr).strip()
+        if completed.returncode != 0:
+            return False, detail or f"{self.name} readiness probe exited {completed.returncode}."
+        return True, detail or f"{self.name} headless automation is ready."
 
     def selected_model(self) -> str | None:
         if self.model_env:
@@ -125,6 +150,7 @@ PROVIDERS: dict[str, ProviderAdapter] = {
             "--ask-for-approval",
             "never",
         ),
+        automation_probe_args=("login", "status"),
     ),
     "gemini": ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",)),
     "codex-ollama": ProviderAdapter(
