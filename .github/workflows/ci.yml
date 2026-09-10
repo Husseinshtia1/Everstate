@@ -35,6 +35,8 @@ jobs:
           node-version: "20"
       - name: Install Everstate
         run: python -m pip install --upgrade pip && pip install -e '.[dev]'
+      - name: Validate real acceptance runner shell syntax
+        run: bash -n benchmarks/system_v1/pulseboard_autobuild/run_real.sh
       - name: Install Ruflo v3
         run: npm install -g 'claude-flow@^3'
       - name: Verify Ruflo readiness
