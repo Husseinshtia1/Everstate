@@ -58,7 +58,13 @@ def _is_internal_or_generated(path: str) -> bool:
     )
 
 
-def _git_changed_files(root: Path) -> set[str]:
+def _add_changed_path(changed: set[str], path: str) -> None:
+    normalized = path.strip().replace("\\", "/")
+    if normalized and not _is_internal_or_generated(normalized):
+        changed.add(normalized)
+
+
+def _git_changed_files(root: Path, baseline_ref: str | None = None) -> set[str]:
     result = subprocess.run(
         ["git", "status", "--porcelain"],
         cwd=root,
@@ -72,10 +78,22 @@ def _git_changed_files(root: Path) -> set[str]:
             continue
         path = line[3:].strip()
         if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        if _is_internal_or_generated(path):
-            continue
-        changed.add(path)
+            old_path, new_path = path.split(" -> ", 1)
+            _add_changed_path(changed, old_path)
+            _add_changed_path(changed, new_path)
+        else:
+            _add_changed_path(changed, path)
+
+    if baseline_ref:
+        committed = subprocess.run(
+            ["git", "diff", "--name-only", "--no-renames", f"{baseline_ref}..HEAD"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for path in committed.stdout.splitlines():
+            _add_changed_path(changed, path)
     return changed
 
 
@@ -96,9 +114,14 @@ def seed_scenario(service: EverstateService, root: Path, scenario: ContinuitySce
     return service.continuation_text(root)
 
 
-def evaluate_scenario(root: Path, scenario: ContinuityScenario) -> AcceptanceReport:
+def evaluate_scenario(
+    root: Path,
+    scenario: ContinuityScenario,
+    *,
+    baseline_ref: str | None = None,
+) -> AcceptanceReport:
     root = root.resolve()
-    changed = _git_changed_files(root)
+    changed = _git_changed_files(root, baseline_ref=baseline_ref)
     checks: list[AcceptanceCheck] = []
 
     for path in scenario.required_changed_files:
