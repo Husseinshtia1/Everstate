@@ -92,3 +92,44 @@ jobs:
           assert debate.task_strategy == "balanced"
           print("debate", debate)
           PY
+
+  codex-cli-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Everstate
+        run: python -m pip install --upgrade pip && pip install -e '.[dev]'
+      - name: Install current verified Codex CLI
+        run: npm install -g '@openai/codex@0.154.0'
+      - name: Verify Codex version
+        run: codex --version
+      - name: Verify Everstate automation flags parse without inference
+        shell: bash
+        run: |
+          codex \
+            -c 'approval_policy="never"' \
+            -c 'sandbox_workspace_write.network_access=false' \
+            exec \
+            --sandbox workspace-write \
+            --ephemeral \
+            --help >/dev/null
+      - name: Verify Everstate command contract matches the live CLI
+        shell: bash
+        run: |
+          python - <<'PY'
+          from everstate.providers import get_provider
+          command = get_provider("codex").automation_command("REAL_ACCEPTANCE_PROMPT")
+          assert command[1:-1] == [
+              "-c", 'approval_policy="never"',
+              "-c", "sandbox_workspace_write.network_access=false",
+              "exec", "--sandbox", "workspace-write", "--ephemeral",
+          ]
+          assert command[-1] == "REAL_ACCEPTANCE_PROMPT"
+          print("Codex automation contract verified")
+          PY
