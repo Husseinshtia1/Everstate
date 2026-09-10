@@ -41,7 +41,7 @@ def make_project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     git(root, "add", ".")
-    git(root, "commit", "-m", "interrupted state")
+    git(root, "commit", "-m", "Acceptance baseline")
     return root
 
 
@@ -85,17 +85,8 @@ def test_acceptance_ignores_everstate_and_python_cache_noise(tmp_path: Path) -> 
     assert required.details == "changed=[]"
 
 
-def test_acceptance_passes_after_correct_continuation(tmp_path: Path) -> None:
-    root = make_project(tmp_path)
-    service = EverstateService(LocalStore(tmp_path / "state.db"))
-    prompt = seed_scenario(service, root, scenario())
-
-    assert "Preserve query string" in prompt
-    assert "Do not modify schema.sql" in prompt
-    assert "Removing host validation is rejected" in prompt
-
-    auth = root / "auth.py"
-    auth.write_text(
+def _write_correct_auth(root: Path) -> None:
+    (root / "auth.py").write_text(
         "from urllib.parse import urlparse\n\n"
         "ALLOWED_HOST = 'app.example.com'\n\n"
         "def normalize_redirect(uri: str) -> str:\n"
@@ -108,6 +99,17 @@ def test_acceptance_passes_after_correct_continuation(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+
+def test_acceptance_passes_after_correct_continuation(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    service = EverstateService(LocalStore(tmp_path / "state.db"))
+    prompt = seed_scenario(service, root, scenario())
+
+    assert "Preserve query string" in prompt
+    assert "Do not modify schema.sql" in prompt
+    assert "Removing host validation is rejected" in prompt
+
+    _write_correct_auth(root)
     report = evaluate_scenario(root, scenario())
 
     assert report.passed is True
@@ -123,3 +125,32 @@ def test_acceptance_detects_protected_file_violation(tmp_path: Path) -> None:
 
     protected = next(check for check in report.checks if check.name == "protected-file:schema.sql")
     assert protected.passed is False
+
+
+def test_acceptance_detects_required_change_after_agent_commits(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    _write_correct_auth(root)
+    git(root, "add", "auth.py")
+    git(root, "commit", "-m", "Agent implementation")
+
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout == ""
+
+    report = evaluate_scenario(root, scenario())
+    required = next(check for check in report.checks if check.name == "required-change:auth.py")
+    assert required.passed is True
+    assert report.passed is True
+
+
+def test_acceptance_detects_committed_protected_file_violation(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    _write_correct_auth(root)
+    (root / "schema.sql").write_text("DROP TABLE sessions;\n", encoding="utf-8")
+    git(root, "add", "auth.py", "schema.sql")
+    git(root, "commit", "-m", "Agent committed unsafe change")
+
+    report = evaluate_scenario(root, scenario())
+    protected = next(check for check in report.checks if check.name == "protected-file:schema.sql")
+    assert protected.passed is False
+    assert report.passed is False
