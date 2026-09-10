@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,12 @@ def main() -> None:
         if term not in readme_text:
             fail(f"README.md is missing required usage/documentation term: {term!r}")
 
+    # Runtime-generated values make a static verifier-output implementation fail.
+    # Every CLI invocation below is a separate Python process, so successful
+    # results also demonstrate persistence across process boundaries.
+    titles = [f"task-{secrets.token_hex(6)}" for _ in range(5)]
+    priorities = [secrets.choice(("low", "normal", "high")) for _ in titles]
+
     with tempfile.TemporaryDirectory(prefix="everstate-pulseboard-") as tmp:
         db = Path(tmp) / "nested" / "state" / "pulseboard.json"
         db_arg = str(db)
@@ -91,59 +98,87 @@ def main() -> None:
         if initial != []:
             fail(f"new database must start empty, got {initial!r}")
 
-        one = parse_json(run("--db", db_arg, "add", "Ship release", "--priority", "high"))
-        assert_task(one, task_id=1, title="Ship release", priority="high", status="open")
-
-        two = parse_json(run("--db", db_arg, "add", "Write notes"))
-        assert_task(two, task_id=2, title="Write notes", priority="normal", status="open")
-
-        three = parse_json(run("--db", db_arg, "add", "Clean cache", "--priority", "low"))
-        assert_task(three, task_id=3, title="Clean cache", priority="low", status="open")
+        expected_tasks: list[dict[str, object]] = []
+        for index, (title, priority) in enumerate(zip(titles, priorities), start=1):
+            created = parse_json(run("--db", db_arg, "add", title, "--priority", priority))
+            assert_task(created, task_id=index, title=title, priority=priority, status="open")
+            expected_tasks.append(created)
 
         opened = parse_json(run("--db", db_arg, "list", "--status", "open", "--json"))
-        if [task["id"] for task in opened] != [1, 2, 3]:
-            fail(f"open tasks must be sorted by id: {opened!r}")
+        if opened != expected_tasks:
+            fail(f"open tasks must preserve runtime values and ascending ids: {opened!r}")
 
-        completed = parse_json(run("--db", db_arg, "done", "2"))
-        assert_task(completed, task_id=2, title="Write notes", priority="normal", status="done")
+        done_id = 2 + secrets.randbelow(3)
+        completed = parse_json(run("--db", db_arg, "done", str(done_id)))
+        expected_done = dict(expected_tasks[done_id - 1])
+        expected_done["status"] = "done"
+        if completed != expected_done:
+            fail(f"completed task mismatch: expected {expected_done!r}, got {completed!r}")
+        expected_tasks[done_id - 1] = expected_done
 
         done_only = parse_json(run("--db", db_arg, "list", "--status", "done", "--json"))
-        if len(done_only) != 1:
+        if done_only != [expected_done]:
             fail(f"done filter returned unexpected tasks: {done_only!r}")
-        assert_task(done_only[0], task_id=2, title="Write notes", priority="normal", status="done")
 
-        stats = parse_json(run("--db", db_arg, "stats"))
+        open_expected = [task for task in expected_tasks if task["status"] == "open"]
+        open_only = parse_json(run("--db", db_arg, "list", "--status", "open", "--json"))
+        if open_only != open_expected:
+            fail(f"open filter returned unexpected tasks: {open_only!r}")
+
+        priority_counts = {"low": 0, "normal": 0, "high": 0}
+        for task in expected_tasks:
+            priority_counts[str(task["priority"])] += 1
         expected_stats = {
-            "total": 3,
-            "open": 2,
+            "total": len(expected_tasks),
+            "open": len(open_expected),
             "done": 1,
-            "by_priority": {"low": 1, "normal": 1, "high": 1},
+            "by_priority": priority_counts,
         }
+        stats = parse_json(run("--db", db_arg, "stats"))
         if stats != expected_stats:
             fail(f"stats mismatch: expected {expected_stats!r}, got {stats!r}")
 
-        four = parse_json(run("--db", db_arg, "add", "Postmortem", "--priority", "high"))
-        assert_task(four, task_id=4, title="Postmortem", priority="high", status="open")
+        # A later create proves IDs remain monotonic after completion and restart.
+        final_title = f"post-{secrets.token_hex(6)}"
+        final_priority = secrets.choice(("low", "normal", "high"))
+        final_task = parse_json(
+            run("--db", db_arg, "add", final_title, "--priority", final_priority)
+        )
+        assert_task(
+            final_task,
+            task_id=len(expected_tasks) + 1,
+            title=final_title,
+            priority=final_priority,
+            status="open",
+        )
 
-        unknown = run("--db", db_arg, "done", "999", expected=2)
+        if not db.is_file():
+            fail("database file was not created at the requested nested path")
+        before_invalid = db.read_bytes()
+
+        unknown = run("--db", db_arg, "done", "999999999", expected=2)
         if not unknown.stderr.strip():
             fail("unknown task id must produce a useful stderr message")
+        if db.read_bytes() != before_invalid:
+            fail("unknown task id corrupted or rewrote persisted task data")
 
         invalid_priority = run(
             "--db", db_arg,
-            "add", "Invalid priority",
+            "add", f"invalid-{secrets.token_hex(4)}",
             "--priority", "urgent",
             expected=2,
         )
         if not invalid_priority.stderr.strip():
             fail("invalid priority must produce a useful stderr message")
+        if db.read_bytes() != before_invalid:
+            fail("invalid priority corrupted or rewrote persisted task data")
 
-        if not db.is_file():
-            fail("database file was not created at the requested nested path")
         try:
-            json.loads(db.read_text(encoding="utf-8"))
+            persisted = json.loads(db.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             fail(f"persisted database is not valid JSON: {exc}")
+        if not isinstance(persisted, dict) or "tasks" not in persisted:
+            fail("persisted database does not contain durable task state")
 
     print("EVR-SYSTEM-001 PASS")
 
