@@ -10,7 +10,7 @@
   ],
   "constraints": [
     "Do not modify POLICY.md.",
-    "Do not modify test_taskboard.py.",
+    "Do not modify acceptance_test.py.",
     "Do not use network access or external dependencies.",
     "Do not use SQLite or another database.",
     "Invalid input must never corrupt existing JSON task data."
@@ -21,13 +21,13 @@
   "blockers": [
     "The starter implementation is intentionally incomplete and all acceptance tests fail until the CLI is implemented."
   ],
-  "next_action": "Inspect taskboard.py, POLICY.md, and test_taskboard.py; implement the CLI completely; run python -m unittest -v before finishing.",
+  "next_action": "Inspect taskboard.py, POLICY.md, and acceptance_test.py; implement the CLI completely; run python -m unittest -v acceptance_test.py before finishing.",
   "required_changed_files": [
     "taskboard.py"
   ],
   "protected_files": [
     "POLICY.md",
-    "test_taskboard.py"
+    "acceptance_test.py"
   ],
   "forbidden_substrings": {
     "taskboard.py": [
@@ -38,7 +38,7 @@
   },
   "validation_commands": [
     {
-      "command": ["python", "-m", "unittest", "-v"],
+      "command": ["python", "-m", "unittest", "-v", "acceptance_test.py"],
       "expected_exit": 0
     }
   ]
