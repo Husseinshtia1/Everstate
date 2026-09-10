@@ -4,7 +4,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${1:-$HOME/everstate-live/EVR-SYSTEM-001}"
 AGENT="${2:-codex}"
-STATE_LEVEL="${3:-full}"
+STATE_LEVEL="${3:-critical}"
 MIN_COUNCIL_AGENTS="${EVERSTATE_MIN_COUNCIL_AGENTS:-2}"
 
 case "$STATE_LEVEL" in
@@ -23,20 +23,18 @@ for executable in git python everstate; do
   fi
 done
 
-case "$AGENT" in
-  codex|codex-ollama) AGENT_EXECUTABLE="codex" ;;
-  claude) AGENT_EXECUTABLE="claude" ;;
-  gemini) AGENT_EXECUTABLE="gemini" ;;
-  codex-omniroute) AGENT_EXECUTABLE="omniroute" ;;
-  *)
-    echo "unsupported primary coding agent: $AGENT" >&2
-    echo "supported: codex, claude, gemini, codex-ollama, codex-omniroute" >&2
-    exit 2
-    ;;
-esac
+# EVR-SYSTEM-001 is deliberately strict. Everstate currently verifies Codex
+# as the headless primary implementation path via `codex exec --full-auto`.
+# Other adapters remain available for interactive handoff, but they must not
+# be advertised as automated acceptance providers until their headless
+# contracts have their own live validation.
+if [[ "$AGENT" != "codex" ]]; then
+  echo "EVR-SYSTEM-001 currently supports only the verified headless provider: codex" >&2
+  exit 2
+fi
 
-if [[ "${EVERSTATE_REAL_DRY_RUN:-0}" != "1" ]] && ! command -v "$AGENT_EXECUTABLE" >/dev/null 2>&1; then
-  echo "primary coding-agent executable not found: $AGENT_EXECUTABLE" >&2
+if [[ "${EVERSTATE_REAL_DRY_RUN:-0}" != "1" ]] && ! command -v codex >/dev/null 2>&1; then
+  echo "primary coding-agent executable not found: codex" >&2
   exit 2
 fi
 
@@ -70,7 +68,7 @@ fi
 
 echo "EVR-SYSTEM-001"
 echo "Workspace: $WORKSPACE"
-echo "Primary coding agent: $AGENT"
+echo "Primary coding agent: $AGENT (headless)"
 echo "State level: $CLI_STATE_LEVEL"
 echo "Minimum council participants: $MIN_COUNCIL_AGENTS"
 echo
