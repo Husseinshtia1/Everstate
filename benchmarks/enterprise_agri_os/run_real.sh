@@ -19,6 +19,10 @@ ARGS=(
 
 if [[ "${EVERSTATE_REAL_DRY_RUN:-0}" == "1" ]]; then
   ARGS+=(--dry-run)
+else
+  # A real enterprise acceptance run must prove the generated stack builds and
+  # starts, not merely that files exist. The protected verifier consumes this.
+  export EVERSTATE_ENTERPRISE_STRICT="${EVERSTATE_ENTERPRISE_STRICT:-1}"
 fi
 
 if [[ "${EVERSTATE_REAL_RESET:-0}" == "1" && -e "$WORKSPACE" ]]; then
