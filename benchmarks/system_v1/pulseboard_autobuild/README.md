@@ -9,7 +9,7 @@ The first release-significant run uses the full chain:
 ```text
 SPEC + verifier
       ↓
-Everstate canonical state (FULL)
+Everstate canonical state (CRITICAL)
       ↓
 ExecutionFabric participant selection
       ↓
@@ -19,7 +19,7 @@ advisory council result
       ↓
 Everstate continuation packet + advisory result
       ↓
-Codex Exec (headless, workspace-write sandbox)
+Codex Exec (headless, workspace-write sandbox, network disabled)
       ↓
 repository changes
       ↓
@@ -36,8 +36,8 @@ Ruflo coordinates the council but does not own canonical project truth. Council 
 
 - `minimal`: objective, current task, next action.
 - `standard` (alias `guarded` in the wrapper): minimal plus decisions and constraints.
-- `full`: standard plus failed attempts and blockers. **Use this for the first real run.**
-- `critical`: full plus a mandatory independent-council constraint; critical cannot run with the council disabled.
+- `full`: standard plus failed attempts and blockers.
+- `critical`: full plus a mandatory independent-council constraint; critical cannot run with the council disabled. **This is the default for EVR-SYSTEM-001.**
 
 A full/critical scenario that omits the required semantic fields is rejected during setup rather than silently pretending that state coverage exists.
 
@@ -84,11 +84,11 @@ codex --version
 codex login status
 ```
 
-Codex is launched non-interactively through `codex exec` with a workspace-write sandbox and approvals disabled for this isolated benchmark workspace. Everstate does **not** use the deprecated `--full-auto` compatibility flag.
+Everstate performs `codex login status` before any council/model calls. Codex is then launched through the current non-interactive `codex exec` interface with explicit `workspace-write` sandboxing, `approval_policy="never"`, network disabled for the workspace sandbox, and an ephemeral session. Everstate deliberately does not use legacy convenience flags or disable the sandbox.
 
 ## Zero-model preflight
 
-Run this first. It creates a disposable workspace, seeds Everstate state, checks Ruflo and council eligibility, and writes a preview of the primary prompt, but does not call council models and does not launch Codex:
+Run this first. It checks Codex authentication, creates a disposable workspace, seeds Everstate state, checks Ruflo and council eligibility, and writes a preview of the primary prompt, but does not call council models and does not launch the coding task:
 
 ```bash
 EVERSTATE_REAL_DRY_RUN=1 \
@@ -96,7 +96,7 @@ EVERSTATE_REAL_RESET=1 \
   bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh \
   "$HOME/everstate-live/EVR-SYSTEM-001" \
   codex \
-  full
+  critical
 ```
 
 A successful preflight ends with:
@@ -114,7 +114,7 @@ EVERSTATE_REAL_RESET=1 \
   bash benchmarks/system_v1/pulseboard_autobuild/run_real.sh \
   "$HOME/everstate-live/EVR-SYSTEM-001" \
   codex \
-  full
+  critical
 ```
 
 The wrapper is intentionally thin. The actual orchestration is a first-class Everstate command equivalent to:
@@ -125,7 +125,7 @@ everstate real-accept \
   --template benchmarks/system_v1/pulseboard_autobuild/project \
   --workspace "$HOME/everstate-live/EVR-SYSTEM-001" \
   --provider codex \
-  --state-level full \
+  --state-level critical \
   --council required \
   --orchestrator ruflo \
   --min-council-agents 2
@@ -140,7 +140,7 @@ The coding agent receives an initially clean project containing `SPEC.md` and `v
 
 The resulting CLI must support `add`, `list`, `done`, and `stats`; persist local JSON across separate process runs; preserve monotonically increasing IDs; use atomic replacement for writes; reject invalid IDs/priorities correctly; avoid third-party/network code; and leave `SPEC.md` and `verify.py` untouched.
 
-The deterministic verifier creates fresh temporary databases and exercises multiple transitions, so a hard-coded demonstration cannot pass legitimately.
+The verifier generates unpredictable task titles/priorities at runtime, launches the CLI in separate Python processes, checks invalid operations do not rewrite the database, and exercises multiple state transitions. A hard-coded demonstration cannot legitimately pass.
 
 ## Evidence retained
 
@@ -159,6 +159,8 @@ Current artifacts include:
 - `primary-prompt.txt` on a real run
 - `state-after.json`
 - `acceptance-report.json`
+
+Acceptance compares repository changes against the immutable `Acceptance baseline` commit as well as the current working tree. Therefore a coding agent cannot hide required changes or protected-file violations by committing them before the verifier runs.
 
 The numeric state version is allowed to advance when Everstate observes new repository evidence. Acceptance instead requires that project identity and the seeded semantic truth remain intact.
 
