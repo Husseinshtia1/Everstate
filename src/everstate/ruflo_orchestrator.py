@@ -179,9 +179,10 @@ class RufloOrchestrator:
 
         local_only = constraints_require_local(packet.constraints)
         topology = "mesh" if mode is CouncilMode.DEBATE else "star"
-        swarm_strategy = "balanced" if mode is CouncilMode.DEBATE else "parallel"
-        # Ruflo v3.41 separates swarm execution strategy from task routing
-        # strategy. `parallel` is valid for swarm init but not task orchestrate.
+        # Ruflo v3.41.1 accepts domain strategies (analysis, balanced, etc.)
+        # for both swarm initialization and task orchestration. Everstate owns
+        # the actual parallel model fan-out; Ruflo coordinates the swarm roles.
+        swarm_strategy = "balanced" if mode is CouncilMode.DEBATE else "analysis"
         task_strategy = "balanced" if mode is CouncilMode.DEBATE else "analysis"
         self._run(
             "swarm",
