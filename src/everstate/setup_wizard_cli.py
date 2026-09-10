@@ -14,6 +14,7 @@ from .execution_config import ExecutionSettings, load_execution_settings, save_e
 from .freellmapi_fabric import FreeLLMAPIConfig, FreeLLMAPIFabric
 from .omniroute_fabric import OmniRouteConfig, OmniRouteFabric
 from .provider_fabric import FabricHealth
+from .ruflo_orchestrator import RufloOrchestrator
 from .ypipe_fabric import YpipeConfig, YpipeFabric
 
 console = Console()
@@ -58,7 +59,7 @@ def register(app: typer.Typer) -> None:
         freellmapi_token: str | None = typer.Option(None, "--freellmapi-token", help="Unified FreeLLMAPI token; stored in the 0600 Everstate execution config."),
         no_browser: bool = typer.Option(False, "--no-browser", help="Do not open the FreeLLMAPI dashboard when a token/provider setup is needed."),
     ) -> None:
-        """Discover, configure, and validate Everstate execution fabrics interactively."""
+        """Discover, configure, and validate Everstate execution fabrics and orchestration."""
         console.print(Panel.fit("Automatic execution discovery and configuration", title="Everstate Setup"))
 
         current = load_execution_settings()
@@ -74,16 +75,24 @@ def register(app: typer.Typer) -> None:
         ypipe_health = _probe(lambda: YpipeFabric(YpipeConfig(base_url=ypipe_url)))
         free_health = _probe(lambda: FreeLLMAPIFabric(FreeLLMAPIConfig(base_url=free_url, api_key=effective_free_token)))
         omni_health = _probe(lambda: OmniRouteFabric(OmniRouteConfig(base_url=omni_url)))
+        ruflo_health = RufloOrchestrator().health()
 
-        table = Table(title="Detected execution fabrics")
-        table.add_column("Fabric")
+        table = Table(title="Detected execution and orchestration services")
+        table.add_column("Service")
         table.add_column("Role")
         table.add_column("State")
         table.add_column("Ready")
-        table.add_column("Endpoint")
+        table.add_column("Endpoint / Version")
         table.add_row("Ypipe", "LOCAL_SOVEREIGN", ypipe_health.status, str(ypipe_health.ready), ypipe_url)
         table.add_row("FreeLLMAPI", "FREE_REMOTE", free_health.status, str(free_health.ready), free_url)
         table.add_row("OmniRoute", "REMOTE_MULTI_PROVIDER", omni_health.status, str(omni_health.ready), omni_url)
+        table.add_row(
+            "Ruflo",
+            "AGENT_ORCHESTRATION",
+            "READY" if ruflo_health.ready else "UNAVAILABLE",
+            str(ruflo_health.ready),
+            ruflo_health.version or "claude-flow v3 required",
+        )
         console.print(table)
 
         if not free_health.ready:
@@ -134,11 +143,10 @@ def register(app: typer.Typer) -> None:
         )
         path = save_execution_settings(settings)
 
-        # Re-probe through the normal runtime constructors. This validates the
-        # exact persisted settings path used by future `everstate start` calls.
         final_free = _probe(FreeLLMAPIFabric) if enable_free else FabricHealth("DISABLED", False, "Disabled by setup policy.")
         final_ypipe = _probe(YpipeFabric) if enable_ypipe else FabricHealth("DISABLED", False, "Disabled by setup policy.")
         final_omni = _probe(OmniRouteFabric) if enable_omni else FabricHealth("DISABLED", False, "Disabled by setup policy.")
+        final_ruflo = RufloOrchestrator().health()
 
         console.print("\n[bold]Saved configuration[/bold]")
         console.print(f"Policy: [cyan]{policy}[/cyan]")
@@ -146,6 +154,7 @@ def register(app: typer.Typer) -> None:
         console.print(f"Ypipe: {final_ypipe.status}")
         console.print(f"FreeLLMAPI: {final_free.status}")
         console.print(f"OmniRoute: {final_omni.status}")
+        console.print(f"Ruflo orchestration: {'READY ' + (final_ruflo.version or '') if final_ruflo.ready else 'UNAVAILABLE'}")
 
         if policy == "local-only" and not final_ypipe.ready:
             console.print(
@@ -158,4 +167,8 @@ def register(app: typer.Typer) -> None:
             console.print("[yellow]Configuration was saved, but no execution fabric is ready yet.[/yellow]")
             raise typer.Exit(code=2)
 
+        if not final_ruflo.ready:
+            console.print(
+                "[yellow]Ruflo v3 is not ready; AgentCouncil will use the native orchestrator until claude-flow v3 is installed.[/yellow]"
+            )
         console.print("[green]Everstate execution setup is ready.[/green]")

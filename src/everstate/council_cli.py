@@ -14,12 +14,14 @@ from .fabric_routing import constraints_require_local
 from .freellmapi_fabric import FreeLLMAPIFabric
 from .omniroute_fabric import OmniRouteFabric
 from .provider_fabric import FabricHealth
+from .ruflo_orchestrator import RufloError, RufloOrchestrator
 from .service import EverstateService
 from .ypipe_fabric import YpipeFabric
 
 console = Console()
 
 _DEFAULT_ROLES = ("architect", "critic", "verifier")
+_ORCHESTRATORS = {"auto", "ruflo", "native"}
 
 
 def _safe_fabric(name: str, factory):
@@ -41,6 +43,13 @@ def _roles(value: str) -> tuple[str, ...]:
     if len(set(roles)) != len(roles):
         raise typer.BadParameter("Council roles must be unique", param_hint="--roles")
     return roles
+
+
+def _orchestrator(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in _ORCHESTRATORS:
+        raise typer.BadParameter("Expected one of: auto, ruflo, native", param_hint="--orchestrator")
+    return normalized
 
 
 def _council_state_is_stale(initial, latest) -> bool:
@@ -117,10 +126,12 @@ def register(app: typer.Typer, service_factory) -> None:
         max_agents: int = typer.Option(3, "--max-agents", min=1, max=8),
         rounds: int = typer.Option(2, "--rounds", min=1, max=5, help="Used by debate mode; parallel review always runs one round."),
         min_successful: int | None = typer.Option(None, "--min-successful", min=1, max=8, help="Required successful agents per round; default is majority quorum."),
+        orchestrator: str = typer.Option("auto", "--orchestrator", help="Agent coordination backend: auto, ruflo, or native."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Show eligible agents without contacting any model."),
         json_output: bool = typer.Option(False, "--json"),
     ) -> None:
         """Ask multiple independent agents/models to review or debate one project decision."""
+        selected_orchestrator = _orchestrator(orchestrator)
         service: EverstateService = service_factory()
         packet = service.continuation_packet(path)
         role_tuple = _roles(roles)
@@ -136,12 +147,29 @@ def register(app: typer.Typer, service_factory) -> None:
                 param_hint="--min-successful",
             )
 
+        ruflo = RufloOrchestrator()
+        ruflo_health = ruflo.health()
+        use_ruflo = selected_orchestrator == "ruflo" or (
+            selected_orchestrator == "auto" and ruflo_health.ready
+        )
+        if selected_orchestrator == "ruflo" and not ruflo_health.ready:
+            console.print(f"[red]Ruflo unavailable:[/red] {ruflo_health.detail}")
+            raise typer.Exit(code=2)
+
+        orchestration = {
+            "requested": selected_orchestrator,
+            "backend": "ruflo" if use_ruflo else "native",
+            "ruflo_ready": ruflo_health.ready,
+            "ruflo_version": ruflo_health.version,
+            "ruflo_detail": ruflo_health.detail,
+        }
         plan = {
             "project_id": packet.project_id,
             "state_version": packet.state_version,
             "question": question,
             "mode": mode.value,
             "local_only": local_only,
+            "orchestration": orchestration,
             "participants": [
                 {"id": item.id, "role": item.role, "fabric": item.fabric.name, "model": item.model}
                 for item in participants
@@ -157,12 +185,40 @@ def register(app: typer.Typer, service_factory) -> None:
                     f"Project: {packet.project_id}@{packet.state_version}",
                     f"Mode: {mode.value}",
                     f"Local only: {local_only}",
+                    f"Orchestrator: {orchestration['backend']}",
+                    f"Ruflo: {ruflo_health.version or 'not ready'} ({ruflo_health.detail})",
                     "Participants:",
                     *[f"- {item.role}: {item.fabric.name}/{item.model}" for item in participants],
-                    "No model contacted.",
+                    "No model contacted and no Ruflo swarm created.",
                 ]
                 console.print(Panel.fit("\n".join(lines), title="Everstate AgentCouncil plan"))
             return
+
+        if use_ruflo:
+            try:
+                run = ruflo.prepare_council(
+                    root=path.resolve(),
+                    packet=packet,
+                    question=question,
+                    participants=participants,
+                    mode=mode,
+                )
+                orchestration.update(
+                    {
+                        "topology": run.topology,
+                        "strategy": run.strategy,
+                        "task_strategy": run.task_strategy,
+                        "agents": list(run.agents),
+                        "task_registered": run.task_registered,
+                        "redacted_for_local_only": run.redacted_for_local_only,
+                    }
+                )
+            except RufloError as exc:
+                if selected_orchestrator == "ruflo":
+                    console.print(f"[red]Ruflo orchestration failed:[/red] {exc}")
+                    raise typer.Exit(code=2) from exc
+                orchestration.update({"backend": "native", "ruflo_fallback_reason": str(exc)})
+                use_ruflo = False
 
         try:
             result = execute_agent_council(
@@ -173,7 +229,9 @@ def register(app: typer.Typer, service_factory) -> None:
                 rounds=rounds,
                 min_successful=min_successful,
             )
-        except CouncilError as exc:
+            if use_ruflo:
+                ruflo.verify_result(packet=packet, result=result)
+        except (CouncilError, RufloError) as exc:
             console.print(f"[red]AgentCouncil failed:[/red] {exc}")
             console.print("[dim]No council response was allowed to mutate canonical Everstate state.[/dim]")
             raise typer.Exit(code=2) from exc
@@ -183,6 +241,7 @@ def register(app: typer.Typer, service_factory) -> None:
 
         report = asdict(result)
         report["mode"] = result.mode.value
+        report["orchestration"] = orchestration
         report["state_stale"] = state_stale
         report["latest_state_version"] = latest.state_version
         if json_output:
@@ -194,6 +253,7 @@ def register(app: typer.Typer, service_factory) -> None:
         console.print(Panel.fit(
             f"Project: {result.project_id}@{result.state_version}\n"
             f"Mode: {result.mode.value}\n"
+            f"Orchestrator: {orchestration['backend']}\n"
             f"Consensus: {result.consensus}\n"
             f"Average confidence: {result.average_confidence:.2f}\n"
             f"Evidence coverage: {result.evidence_coverage:.0%}\n"

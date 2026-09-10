@@ -9,6 +9,7 @@ from .fabric_check_cli import register as register_fabric_check
 from .fabric_continue_cli import register as register_fabric_continue
 from .fabric_route_cli import register as register_fabric_route
 from .omniroute_check_cli import register as register_omniroute_check
+from .ruflo_cli import register as register_ruflo
 from .setup_wizard_cli import register as register_setup
 from .work_start_cli import register as register_work_start
 from .ypipe_check_cli import register as register_ypipe_check
@@ -34,6 +35,7 @@ app = _cli.app
 register_setup(app)
 register_work_start(app, _cli._service)
 register_council(app, _cli._service)
+register_ruflo(app)
 register_omniroute_check(app)
 register_ypipe_check(app)
 register_fabric_route(app, _cli._service)
