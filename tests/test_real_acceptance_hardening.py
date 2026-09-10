@@ -45,14 +45,19 @@ def test_codex_real_acceptance_uses_headless_exec_contract() -> None:
     provider = get_provider("codex")
     command = provider.automation_command("Build it")
     assert command[1:] == [
+        "-c",
+        'approval_policy="never"',
+        "-c",
+        "sandbox_workspace_write.network_access=false",
         "exec",
         "--sandbox",
         "workspace-write",
-        "--ask-for-approval",
-        "never",
+        "--ephemeral",
         "Build it",
     ]
     assert "--full-auto" not in command
+    assert "--ask-for-approval" not in command
+    assert "--dangerously-bypass-approvals-and-sandbox" not in command
     assert provider.automation_supported
 
 
