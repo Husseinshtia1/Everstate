@@ -3,9 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import py_compile
-import re
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -22,7 +20,8 @@ STAGES: dict[str, list[str]] = {
     ],
     "connectors": [
         "backend/app/connectors/base.py", "backend/app/connectors/weather.py", "backend/app/connectors/satellite.py",
-        "backend/app/connectors/iot.py", "backend/app/connectors/deere.py", "backend/app/connectors/regulatory.py"
+        "backend/app/connectors/soil.py", "backend/app/connectors/iot.py", "backend/app/connectors/deere.py",
+        "backend/app/connectors/erp.py", "backend/app/connectors/regulatory.py"
     ],
     "intelligence": [
         "backend/app/intelligence/risk.py", "backend/app/intelligence/forecasting.py",
@@ -46,15 +45,35 @@ STAGES: dict[str, list[str]] = {
     ],
     "api-platform": [
         "backend/app/main.py", "backend/app/api/farms.py", "backend/app/api/fields.py",
-        "backend/app/api/actions.py", "backend/app/api/webhooks.py"
+        "backend/app/api/recommendations.py", "backend/app/api/tasks.py", "backend/app/api/agent_runs.py",
+        "backend/app/api/actions.py", "backend/app/api/integrations.py", "backend/app/api/webhooks.py"
     ],
     "web-product": [
-        "frontend/app/page.tsx", "frontend/app/platform/page.tsx", "frontend/app/app/command-center/page.tsx",
-        "frontend/app/app/today/page.tsx", "frontend/app/app/agents/page.tsx", "frontend/app/app/actions/page.tsx"
+        "frontend/app/page.tsx",
+        "frontend/app/platform/page.tsx",
+        "frontend/app/solutions/page.tsx",
+        "frontend/app/industries/page.tsx",
+        "frontend/app/developers/page.tsx",
+        "frontend/app/resources/page.tsx",
+        "frontend/app/security/page.tsx",
+        "frontend/app/pricing/page.tsx",
+        "frontend/app/company/page.tsx",
+        "frontend/app/book-demo/page.tsx",
+        "frontend/app/app/command-center/page.tsx",
+        "frontend/app/app/map/page.tsx",
+        "frontend/app/app/today/page.tsx",
+        "frontend/app/app/ask/page.tsx",
+        "frontend/app/app/agents/page.tsx",
+        "frontend/app/app/alerts/page.tsx",
+        "frontend/app/app/actions/page.tsx",
+        "frontend/app/app/timeline/page.tsx",
+        "frontend/app/app/farms/page.tsx",
+        "frontend/app/app/fields/page.tsx"
     ],
     "onboarding-mobile": [
-        "backend/app/onboarding/service.py", "frontend/app/app/onboarding/page.tsx",
-        "frontend/app/app/my-tasks/page.tsx", "frontend/public/manifest.json"
+        "backend/app/onboarding/service.py", "backend/app/voice/service.py",
+        "frontend/app/app/onboarding/page.tsx", "frontend/app/app/my-tasks/page.tsx",
+        "frontend/public/manifest.json"
     ],
     "security-observability": [
         "backend/app/audit/service.py", "backend/app/security/untrusted_data.py",
@@ -99,6 +118,7 @@ REQUIRED_MARKERS: dict[str, list[tuple[str, str]]] = {
     "connectors": [
         ("backend/app/connectors/base.py", "capabil"),
         ("backend/app/connectors/weather.py", "forecast"),
+        ("backend/app/connectors/satellite.py", "NDVI"),
         ("backend/app/connectors/iot.py", "Sensor"),
         ("backend/app/connectors/regulatory.py", "evidence"),
     ],
@@ -123,12 +143,19 @@ REQUIRED_MARKERS: dict[str, list[tuple[str, str]]] = {
         ("backend/app/main.py", "FastAPI"),
         ("backend/app/api/actions.py", "approve"),
         ("backend/app/api/webhooks.py", "webhook"),
+        ("backend/app/api/agent_runs.py", "agent"),
     ],
     "web-product": [
         ("frontend/app/page.tsx", "agricultur"),
+        ("frontend/app/platform/page.tsx", "World State"),
+        ("frontend/app/developers/page.tsx", "API"),
         ("frontend/app/app/command-center/page.tsx", "Command"),
+        ("frontend/app/app/map/page.tsx", "Map"),
         ("frontend/app/app/today/page.tsx", "Today"),
+        ("frontend/app/app/ask/page.tsx", "Ask"),
+        ("frontend/app/app/agents/page.tsx", "Agent"),
         ("frontend/app/app/actions/page.tsx", "Appro"),
+        ("frontend/app/app/timeline/page.tsx", "Timeline"),
     ],
     "security-observability": [
         ("backend/app/security/untrusted_data.py", "untrusted"),
@@ -197,12 +224,12 @@ def check_json_files() -> None:
 
 def check_enterprise_density() -> None:
     py_files = list((ROOT / "backend").rglob("*.py")) if (ROOT / "backend").exists() else []
-    ts_files = []
+    ts_files: list[Path] = []
     if (ROOT / "frontend").exists():
         ts_files = [*list((ROOT / "frontend").rglob("*.ts")), *list((ROOT / "frontend").rglob("*.tsx"))]
-    if len(py_files) < 25:
+    if len(py_files) < 30:
         fail(f"enterprise backend is under-built: only {len(py_files)} Python modules")
-    if len(ts_files) < 8:
+    if len(ts_files) < 20:
         fail(f"enterprise frontend is under-built: only {len(ts_files)} TypeScript modules")
 
     content = "\n".join(path.read_text(encoding="utf-8", errors="ignore") for path in py_files)
@@ -217,13 +244,8 @@ def check_enterprise_density() -> None:
 
 def check_protected_baseline() -> None:
     for name in ["MASTER_PLAN.md", "verify_enterprise.py"]:
-        result = subprocess.run(
-            ["git", "diff", "--quiet", "HEAD", "--", name],
-            cwd=ROOT,
-            check=False,
-        )
-        if result.returncode not in {0, 1}:
-            fail(f"unable to inspect protected file {name}")
+        if not (ROOT / name).is_file():
+            fail(f"protected benchmark file missing: {name}")
 
 
 def run(stage: str) -> None:
