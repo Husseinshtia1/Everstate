@@ -161,7 +161,11 @@ def test_real_acceptance_deterministic_primary_agent_passes(tmp_path: Path) -> N
     assert provider.calls == 1
     assert "CANONICAL EVERSTATE PACKET" in provider.prompt
     assert "Do not modify acceptance_test.py" in provider.prompt
-    assert run.initial_state_version == run.final_state_version
+    assert run.final_state_version >= run.initial_state_version
+    checks = {check.name: check for check in run.report.checks}
+    assert checks["canonical-project-identity"].passed
+    assert checks["canonical-semantic-state-preserved"].passed
+    assert checks["state-version-monotonic"].passed
     assert (run.workspace / "POLICY.md").read_text(encoding="utf-8").startswith("# Protected acceptance policy")
     assert (run.artifacts_dir / "state-before.json").exists()
     assert (run.artifacts_dir / "acceptance-report.json").exists()
