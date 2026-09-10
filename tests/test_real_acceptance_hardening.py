@@ -44,7 +44,15 @@ def _scenario(**overrides) -> ContinuityScenario:
 def test_codex_real_acceptance_uses_headless_exec_contract() -> None:
     provider = get_provider("codex")
     command = provider.automation_command("Build it")
-    assert command[-3:] == ["exec", "--full-auto", "Build it"]
+    assert command[1:] == [
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        "Build it",
+    ]
+    assert "--full-auto" not in command
     assert provider.automation_supported
 
 
