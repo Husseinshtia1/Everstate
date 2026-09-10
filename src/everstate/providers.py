@@ -118,7 +118,13 @@ PROVIDERS: dict[str, ProviderAdapter] = {
     "codex": ProviderAdapter(
         name="Codex",
         executable="codex",
-        automation_args=("exec", "--full-auto"),
+        automation_args=(
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "never",
+        ),
     ),
     "gemini": ProviderAdapter(name="Gemini CLI", executable="gemini", prompt_args=("-i",)),
     "codex-ollama": ProviderAdapter(
