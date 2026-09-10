@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -125,6 +126,11 @@ class ExplodingProvider:
         raise AssertionError("dry-run contacted the primary provider")
 
 
+class FakeRuflo:
+    def health(self):
+        return SimpleNamespace(ready=True, version="3.41.1", detail="fake preflight")
+
+
 def _scenario(repo_root: Path) -> ContinuityScenario:
     return ContinuityScenario.load(repo_root / "benchmarks/real_build_v1/taskboard_cli/scenario.json")
 
@@ -157,16 +163,25 @@ def test_real_acceptance_deterministic_primary_agent_passes(tmp_path: Path) -> N
     assert "Do not modify acceptance_test.py" in provider.prompt
     assert run.initial_state_version == run.final_state_version
     assert (run.workspace / "POLICY.md").read_text(encoding="utf-8").startswith("# Protected acceptance policy")
+    assert (run.artifacts_dir / "state-before.json").exists()
+    assert (run.artifacts_dir / "acceptance-report.json").exists()
 
 
-def test_real_acceptance_dry_run_contacts_neither_council_nor_provider(
+def test_real_acceptance_dry_run_is_preflight_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
+    calls = {"preflight": 0, "council": 0}
+
+    def fake_preflight(**kwargs):
+        calls["preflight"] += 1
+        return (SimpleNamespace(id="architect"), SimpleNamespace(id="verifier")), "ruflo", FakeRuflo()
 
     def fail_council(**kwargs):
-        raise AssertionError("dry-run contacted council")
+        calls["council"] += 1
+        raise AssertionError("dry-run executed council models")
 
+    monkeypatch.setattr("everstate.live_acceptance._resolve_council_preflight", fake_preflight)
     monkeypatch.setattr("everstate.live_acceptance.run_council", fail_council)
     run = run_real_acceptance(
         service=_service(tmp_path),
@@ -179,9 +194,28 @@ def test_real_acceptance_dry_run_contacts_neither_council_nor_provider(
         dry_run=True,
     )
 
-    assert run.council_backend == "not-run"
+    assert calls == {"preflight": 1, "council": 0}
+    assert run.council_backend == "ruflo"
+    assert run.council_participants == 2
     assert run.provider_returncode is None
     assert run.report.passed
+    assert (run.artifacts_dir / "primary-prompt-preview.txt").exists()
+
+
+def test_critical_state_level_cannot_disable_council(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = tmp_path / "must-not-be-created"
+    with pytest.raises(ValueError, match="critical state level requires independent council review"):
+        run_real_acceptance(
+            service=_service(tmp_path),
+            template=_template(repo_root),
+            workspace=workspace,
+            scenario=_scenario(repo_root),
+            provider=FakeProvider(),
+            state_level=StateLevel.CRITICAL,
+            require_council=False,
+        )
+    assert not workspace.exists()
 
 
 def test_ruflo_runtime_artifacts_are_not_project_changes(tmp_path: Path) -> None:
@@ -198,7 +232,6 @@ def test_ruflo_runtime_artifacts_are_not_project_changes(tmp_path: Path) -> None
     (run.workspace / ".claude-flow").mkdir()
     (run.workspace / ".claude-flow" / "runtime.json").write_text("{}", encoding="utf-8")
 
-    # The scenario remains valid because orchestration/runtime metadata is not product evidence.
     from everstate.acceptance import evaluate_scenario
 
     report = evaluate_scenario(run.workspace, _scenario(repo_root))
