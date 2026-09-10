@@ -55,7 +55,10 @@ def _is_generated_or_internal(path: str) -> bool:
     if not parts:
         return False
 
-    if parts[0] == ".everstate":
+    # Runtime/control-plane artifacts are evidence about orchestration, not
+    # product source changes. They must never enter canonical modified_files or
+    # alter the Git snapshot identity merely because Everstate/Ruflo ran.
+    if parts[0] in {".everstate", ".claude-flow"}:
         return True
     if "__pycache__" in parts:
         return True
