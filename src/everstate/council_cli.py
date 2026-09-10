@@ -207,6 +207,7 @@ def register(app: typer.Typer, service_factory) -> None:
                     {
                         "topology": run.topology,
                         "strategy": run.strategy,
+                        "task_strategy": run.task_strategy,
                         "agents": list(run.agents),
                         "task_registered": run.task_registered,
                         "redacted_for_local_only": run.redacted_for_local_only,
