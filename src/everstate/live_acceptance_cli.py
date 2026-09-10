@@ -65,9 +65,14 @@ def register(app: typer.Typer, service_factory) -> None:
                 f"Primary coding provider {provider_name!r} has no verified headless automation contract yet.",
                 param_hint="--provider",
             )
-        if not dry_run and not provider.available():
+
+        # This probe is deliberately before any council/model execution. A real
+        # acceptance run must not spend reviewer calls only to discover later
+        # that its primary coding agent is missing or unauthenticated.
+        provider_ready, provider_detail = provider.automation_preflight()
+        if not provider_ready:
             raise typer.BadParameter(
-                f"Primary coding provider {provider_name!r} is not installed or configured.",
+                f"Primary coding provider {provider_name!r} is not ready: {provider_detail}",
                 param_hint="--provider",
             )
 
@@ -98,6 +103,7 @@ def register(app: typer.Typer, service_factory) -> None:
             "council_backend": run.council_backend,
             "council_participants": run.council_participants,
             "provider": run.provider,
+            "provider_preflight": provider_detail,
             "provider_returncode": run.provider_returncode,
             "report": run.report.model_dump(),
             "dry_run": dry_run,
@@ -113,6 +119,7 @@ def register(app: typer.Typer, service_factory) -> None:
                     f"State level: {run.state_level.value}\n"
                     f"Council: {run.council_backend} ({run.council_participants} participants)\n"
                     f"Primary agent: {run.provider}\n"
+                    f"Primary preflight: {provider_detail}\n"
                     f"Evidence: {run.artifacts_dir}\n"
                     f"Acceptance score: {run.report.score:.0%}\n"
                     f"Passed: {run.report.passed}",
@@ -124,7 +131,7 @@ def register(app: typer.Typer, service_factory) -> None:
                 console.print(f"{mark} {check.name}: {check.details}")
             if dry_run:
                 console.print(
-                    "[yellow]Dry run only: council/model execution was not started and the primary coding agent was not contacted.[/yellow]"
+                    "[yellow]Dry run only: readiness probes ran, but council/model execution and the primary coding task were not started.[/yellow]"
                 )
 
         if not dry_run and not run.report.passed:
