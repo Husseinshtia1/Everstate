@@ -39,7 +39,7 @@ jobs:
         run: npm install -g 'claude-flow@^3'
       - name: Verify Ruflo readiness
         run: everstate ruflo-check --json
-      - name: Exercise live Ruflo swarm contract
+      - name: Exercise live Ruflo review and debate contracts
         shell: bash
         run: |
           python - <<'PY'
@@ -52,23 +52,37 @@ jobs:
           class Fabric:
               name = "ypipe"
 
-          root = Path(tempfile.mkdtemp(prefix="everstate-ruflo-"))
-          packet = ContinuationPacket(project_id="proj_ci_ruflo", state_version=1)
           participants = (
               CouncilParticipant(role="architect", fabric=Fabric(), model="ci-a", local=True),
               CouncilParticipant(role="verifier", fabric=Fabric(), model="ci-b", local=True),
           )
-          run = RufloOrchestrator().prepare_council(
-              root=root,
-              packet=packet,
-              question="Validate Everstate Ruflo orchestration contract",
+          orchestrator = RufloOrchestrator()
+
+          review_root = Path(tempfile.mkdtemp(prefix="everstate-ruflo-review-"))
+          review = orchestrator.prepare_council(
+              root=review_root,
+              packet=ContinuationPacket(project_id="proj_ci_review", state_version=1),
+              question="Validate Everstate Ruflo review contract",
               participants=participants,
               mode=CouncilMode.PARALLEL_REVIEW,
           )
-          assert run.enabled
-          assert run.task_registered
-          assert run.topology == "star"
-          assert run.strategy == "analysis"
-          assert run.task_strategy == "analysis"
-          print(run)
+          assert review.enabled and review.task_registered
+          assert review.topology == "star"
+          assert review.strategy == "analysis"
+          assert review.task_strategy == "analysis"
+          print("review", review)
+
+          debate_root = Path(tempfile.mkdtemp(prefix="everstate-ruflo-debate-"))
+          debate = orchestrator.prepare_council(
+              root=debate_root,
+              packet=ContinuationPacket(project_id="proj_ci_debate", state_version=1),
+              question="Debate the Everstate Ruflo orchestration boundary",
+              participants=participants,
+              mode=CouncilMode.DEBATE,
+          )
+          assert debate.enabled and debate.task_registered
+          assert debate.topology == "mesh"
+          assert debate.strategy == "balanced"
+          assert debate.task_strategy == "balanced"
+          print("debate", debate)
           PY
