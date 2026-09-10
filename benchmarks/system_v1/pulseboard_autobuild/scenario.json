@@ -1,0 +1,48 @@
+{
+  "name": "pulseboard_autobuild_full_system",
+  "objective": "Build Pulseboard as a local-only Python CLI that satisfies SPEC.md and passes verify.py without user re-explanation.",
+  "current_task": "Implement the complete Pulseboard CLI from the canonical project state and repository evidence.",
+  "decisions": [
+    "Use JSON file persistence rather than SQLite",
+    "Use positive monotonically increasing integer task IDs",
+    "Use atomic same-directory replacement for every persisted write"
+  ],
+  "constraints": [
+    "Do not modify SPEC.md",
+    "Do not modify verify.py",
+    "Use Python 3.11+ standard library only",
+    "Do not use network access or network libraries",
+    "Keep all application data local to the path supplied by --db"
+  ],
+  "failed_attempts": [
+    "Hard-coding expected verifier outputs is rejected because verification uses fresh temporary databases and multiple process restarts"
+  ],
+  "blockers": [
+    "No Pulseboard implementation or README exists yet"
+  ],
+  "next_action": "Read SPEC.md, implement pulseboard.py and README.md, run python verify.py, and repair the implementation until verification exits 0.",
+  "required_changed_files": [
+    "pulseboard.py",
+    "README.md"
+  ],
+  "protected_files": [
+    "SPEC.md",
+    "verify.py"
+  ],
+  "forbidden_substrings": {
+    "pulseboard.py": [
+      "import requests",
+      "from requests",
+      "import socket",
+      "import urllib",
+      "import httpx",
+      "import aiohttp"
+    ]
+  },
+  "validation_commands": [
+    {
+      "command": ["python", "verify.py"],
+      "expected_exit": 0
+    }
+  ]
+}
