@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 
 from everstate.git_observer import snapshot, snapshot_event
+from everstate.service import EverstateService
+from everstate.storage import LocalStore
 
 
 def _git(root: Path, *args: str) -> None:
@@ -50,3 +52,39 @@ def test_real_project_change_remains_visible_with_ruflo_runtime_noise(tmp_path: 
     assert snap.modified_files == ["app.py"]
     assert "app.py" in snap.status_porcelain
     assert ".claude-flow" not in snap.status_porcelain
+
+
+def test_ruflo_runtime_tree_does_not_advance_service_state_version(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    service = EverstateService(LocalStore(tmp_path / "state.db"))
+    service.init_project(root)
+    service.set_objective(root, "Preserve project truth")
+    before = service.continuation_packet(root)
+
+    runtime = root / ".claude-flow" / "tasks"
+    runtime.mkdir(parents=True)
+    (runtime / "store.json").write_text('{"tasks": [{"id": "ruflo-only"}]}\n', encoding="utf-8")
+
+    after = service.continuation_packet(root)
+
+    assert after.project_id == before.project_id
+    assert after.state_version == before.state_version
+    assert after.objective == before.objective
+    assert after.modified_files == before.modified_files == []
+
+
+def test_real_project_change_advances_state_even_with_ruflo_noise(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    service = EverstateService(LocalStore(tmp_path / "state.db"))
+    service.init_project(root)
+    before = service.continuation_packet(root)
+
+    runtime = root / ".claude-flow" / "agents"
+    runtime.mkdir(parents=True)
+    (runtime / "store.json").write_text('{"agents": {}}\n', encoding="utf-8")
+    (root / "app.py").write_text("VALUE = 3\n", encoding="utf-8")
+
+    after = service.continuation_packet(root)
+
+    assert after.state_version > before.state_version
+    assert after.modified_files == ["app.py"]
