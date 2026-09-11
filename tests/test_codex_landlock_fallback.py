@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from everstate.providers import PROVIDERS, ProviderAdapter
 
@@ -17,6 +20,7 @@ def test_codex_automation_stays_on_workspace_write_managed_sandbox(monkeypatch):
     assert 'approval_policy="never"' in command
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Codex managed bubblewrap preflight is Linux-specific")
 def test_codex_preflight_probes_managed_sandbox_without_inference(monkeypatch):
     monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/usr/bin/codex")
     calls: list[list[str]] = []
@@ -36,6 +40,7 @@ def test_codex_preflight_probes_managed_sandbox_without_inference(monkeypatch):
     assert calls[1] == ["/usr/bin/codex", "sandbox", "/bin/true"]
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Ubuntu/AppArmor userns diagnosis is Linux-specific")
 def test_codex_preflight_explains_ubuntu_userns_failure(monkeypatch):
     monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/usr/bin/codex")
 
