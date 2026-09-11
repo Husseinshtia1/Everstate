@@ -28,13 +28,6 @@ def _candidate_executables(executable: str) -> list[Path]:
     return candidates
 
 
-def _env_truthy(name: str) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 @dataclass(frozen=True)
 class ProviderAdapter:
     name: str
@@ -88,30 +81,45 @@ class ProviderAdapter:
         if completed.returncode != 0:
             return False, detail or f"{self.name} readiness probe exited {completed.returncode}."
 
-        if self.executable == "codex" and _env_truthy("EVERSTATE_CODEX_LEGACY_LANDLOCK"):
+        # Codex workspace-write on Linux is enforced by the managed bubblewrap
+        # sandbox. Legacy Landlock cannot satisfy permission profiles that need
+        # direct runtime enforcement, so do not silently switch backends. Probe
+        # the real managed sandbox before any inference request and fail with a
+        # host-policy diagnosis if Ubuntu/AppArmor blocks unprivileged userns.
+        if self.executable == "codex" and os.name == "posix" and Path("/proc/sys/kernel").exists():
             try:
                 sandbox_probe = subprocess.run(
-                    [
-                        executable,
-                        "-c",
-                        "use_legacy_landlock=true",
-                        "sandbox",
-                        "/bin/true",
-                    ],
+                    [executable, "sandbox", "/bin/true"],
                     capture_output=True,
                     text=True,
                     check=False,
                     timeout=timeout,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
-                return False, f"Codex Landlock sandbox probe failed: {exc}"
+                return False, f"Codex managed sandbox probe failed: {exc}"
             sandbox_detail = (sandbox_probe.stderr or sandbox_probe.stdout).strip()
             if sandbox_probe.returncode != 0:
+                hint = ""
+                if any(
+                    marker in sandbox_detail
+                    for marker in (
+                        "Failed RTM_NEWADDR",
+                        "Failed RTM_NEWLINK",
+                        "setting up uid map",
+                        "No permissions to create a new namespace",
+                    )
+                ):
+                    hint = (
+                        " Ubuntu/AppArmor is blocking the unprivileged user namespace required by "
+                        "Codex bubblewrap. Keep workspace-write enabled and repair the host sandbox "
+                        "prerequisite; do not use legacy Landlock for this permission profile."
+                    )
                 return False, (
-                    "Codex legacy Landlock sandbox is not usable on this host: "
+                    "Codex managed workspace sandbox is not usable on this host: "
                     + (sandbox_detail or f"exit={sandbox_probe.returncode}")
+                    + hint
                 )
-            return True, f"{detail or self.name + ' headless automation is ready.'}; legacy Landlock sandbox probe passed."
+            return True, f"{detail or self.name + ' headless automation is ready.'}; managed sandbox probe passed."
 
         return True, detail or f"{self.name} headless automation is ready."
 
@@ -138,15 +146,7 @@ class ProviderAdapter:
             raise RuntimeError(
                 f"{self.name} does not yet have a verified non-interactive automation contract in Everstate."
             )
-        args = list(self.automation_args)
-        if self.executable == "codex" and _env_truthy("EVERSTATE_CODEX_LEGACY_LANDLOCK"):
-            # Ubuntu/AppArmor can block the bubblewrap user namespace used by
-            # Codex's default Linux workspace sandbox. Codex exposes a legacy
-            # Landlock backend that preserves workspace-write restrictions
-            # without switching to danger-full-access. Keep this opt-in so
-            # ordinary installations stay on Codex's default sandbox backend.
-            args[0:0] = ["-c", "use_legacy_landlock=true"]
-        return [self.resolve_executable() or self.executable, *args, prompt]
+        return [self.resolve_executable() or self.executable, *self.automation_args, prompt]
 
     def launch(self, root: Path, prompt: str) -> int:
         executable = self.resolve_executable()
