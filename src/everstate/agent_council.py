@@ -266,6 +266,40 @@ def _retryable_participant_error(exc: Exception) -> bool:
     return re.search(r"http 5\d\d", text) is not None
 
 
+def _with_discovered_alternates(
+    participants: tuple[CouncilParticipant, ...],
+) -> tuple[CouncilParticipant, ...]:
+    enriched = list(participants)
+    groups: dict[int, list[int]] = {}
+    for index, participant in enumerate(participants):
+        if participant.alternates:
+            continue
+        groups.setdefault(id(participant.fabric), []).append(index)
+
+    for indices in groups.values():
+        exemplar = participants[indices[0]]
+        try:
+            targets = exemplar.fabric.discover_targets()
+        except Exception:  # noqa: BLE001 - discovery failure must not erase the primary path
+            continue
+        primary_models = {participants[index].model for index in indices}
+        remaining = [target.id for target in targets if target.id not in primary_models]
+        if not remaining:
+            continue
+        width = len(indices)
+        for position, participant_index in enumerate(indices):
+            participant = participants[participant_index]
+            alternates = tuple(remaining[position::width][:4])
+            enriched[participant_index] = CouncilParticipant(
+                role=participant.role,
+                fabric=participant.fabric,
+                model=participant.model,
+                local=participant.local,
+                alternates=alternates,
+            )
+    return tuple(enriched)
+
+
 def _execute_one(
     participant: CouncilParticipant,
     packet: ContinuationPacket,
@@ -320,12 +354,13 @@ def _parallel_round(
 ) -> tuple[tuple[CouncilOpinion, ...], tuple[CouncilFailure, ...]]:
     if not participants:
         raise CouncilError("AgentCouncil requires at least one participant")
+    active_participants = _with_discovered_alternates(participants)
     results: list[CouncilOpinion] = []
     failures: list[CouncilFailure] = []
-    with ThreadPoolExecutor(max_workers=min(8, len(participants))) as pool:
+    with ThreadPoolExecutor(max_workers=min(8, len(active_participants))) as pool:
         futures = {
             pool.submit(_execute_one, participant, packet, question, round_number, prior_opinions): participant
-            for participant in participants
+            for participant in active_participants
         }
         for future in as_completed(futures):
             participant = futures[future]
