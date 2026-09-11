@@ -96,7 +96,6 @@ class ProviderAdapter:
                         "-c",
                         "use_legacy_landlock=true",
                         "sandbox",
-                        "linux",
                         "/bin/true",
                     ],
                     capture_output=True,
