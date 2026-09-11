@@ -28,6 +28,13 @@ def _candidate_executables(executable: str) -> list[Path]:
     return candidates
 
 
+def _env_truthy(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class ProviderAdapter:
     name: str
@@ -105,7 +112,15 @@ class ProviderAdapter:
             raise RuntimeError(
                 f"{self.name} does not yet have a verified non-interactive automation contract in Everstate."
             )
-        return [self.resolve_executable() or self.executable, *self.automation_args, prompt]
+        args = list(self.automation_args)
+        if self.executable == "codex" and _env_truthy("EVERSTATE_CODEX_LEGACY_LANDLOCK"):
+            # Ubuntu/AppArmor can block the bubblewrap user namespace used by
+            # Codex's default Linux workspace sandbox. Codex exposes a legacy
+            # Landlock backend that preserves workspace-write restrictions
+            # without switching to danger-full-access. Keep this opt-in so
+            # ordinary installations stay on Codex's default sandbox backend.
+            args[0:0] = ["-c", "use_legacy_landlock=true"]
+        return [self.resolve_executable() or self.executable, *args, prompt]
 
     def launch(self, root: Path, prompt: str) -> int:
         executable = self.resolve_executable()
