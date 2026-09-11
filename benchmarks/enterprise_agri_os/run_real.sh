@@ -15,6 +15,20 @@ ORCHESTRATOR="${3:-auto}"
 # council reasoning on free/shared providers. Operators can still override this.
 export EVERSTATE_FREELLMAPI_TIMEOUT="${EVERSTATE_FREELLMAPI_TIMEOUT:-45}"
 
+# Ubuntu/AppArmor commonly restricts unprivileged user namespaces. Codex's
+# default Linux workspace sandbox uses bubblewrap and can then fail before any
+# tool command starts with `loopback: Failed RTM_NEWADDR: Operation not
+# permitted`. Codex still exposes its legacy Landlock workspace sandbox, which
+# preserves workspace-write restrictions and does not grant danger-full-access.
+# Enable that fallback only on hosts that advertise the AppArmor restriction;
+# operators can force 0/1 explicitly.
+if [[ "$PROVIDER" == "codex" && "$(uname -s 2>/dev/null || true)" == "Linux" ]]; then
+  APPARMOR_USERNS="/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+  if [[ -r "$APPARMOR_USERNS" ]] && [[ "$(cat "$APPARMOR_USERNS" 2>/dev/null || true)" == "1" ]]; then
+    export EVERSTATE_CODEX_LEGACY_LANDLOCK="${EVERSTATE_CODEX_LEGACY_LANDLOCK:-1}"
+  fi
+fi
+
 ARGS=(
   autobuild
   --plan "$BENCHMARK/plan.json"
