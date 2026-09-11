@@ -3,8 +3,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+class ProviderQuotaError(RuntimeError):
+    """Raised when a coding provider cannot run because its usage quota is exhausted."""
 
 
 def _candidate_executables(executable: str) -> list[Path]:
@@ -26,6 +31,20 @@ def _candidate_executables(executable: str) -> list[Path]:
         ]
     )
     return candidates
+
+
+def _provider_quota_exhausted(output: str) -> bool:
+    text = output.casefold()
+    markers = (
+        "you've hit your usage limit",
+        "you have hit your usage limit",
+        "usage limit reached",
+        "quota exceeded",
+        "quota exhausted",
+        "insufficient credits",
+        "purchase more credits",
+    )
+    return any(marker in text for marker in markers)
 
 
 @dataclass(frozen=True)
@@ -171,7 +190,24 @@ class ProviderAdapter:
             )
         command = self.automation_command(prompt)
         command[0] = executable
-        completed = subprocess.run(command, cwd=root.resolve(), check=False)
+        completed = subprocess.run(
+            command,
+            cwd=root.resolve(),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.stdout:
+            sys.stdout.write(completed.stdout)
+            sys.stdout.flush()
+        if completed.stderr:
+            sys.stderr.write(completed.stderr)
+            sys.stderr.flush()
+        combined = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        if completed.returncode != 0 and _provider_quota_exhausted(combined):
+            raise ProviderQuotaError(
+                f"{self.name} usage quota is exhausted. Preserve the workspace and resume after the provider limit resets."
+            )
         return completed.returncode
 
     @property
