@@ -18,6 +18,7 @@ def test_codex_automation_stays_on_workspace_write_managed_sandbox(monkeypatch):
     assert "danger-full-access" not in command
     assert "use_legacy_landlock=true" not in command
     assert 'approval_policy="never"' in command
+    assert "agents.enabled=false" in command
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Codex managed bubblewrap preflight is Linux-specific")
