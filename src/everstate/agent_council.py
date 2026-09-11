@@ -35,6 +35,7 @@ class CouncilParticipant:
     fabric: ExecutionFabric
     model: str
     local: bool | None = None
+    alternates: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:
@@ -235,6 +236,36 @@ def _messages(
     ]
 
 
+def _retryable_participant_error(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    if "identity drift" in text:
+        return False
+    if isinstance(exc, TimeoutError):
+        return True
+    markers = (
+        "http 429",
+        "rate_limit",
+        "rate limit",
+        "rate-limited",
+        "cooldown",
+        "all models exhausted",
+        "model_not_found",
+        "model not found",
+        "http 404",
+        "timeout",
+        "timed out",
+        "non-json output",
+        "must return one json object",
+        "omitted recommendation",
+        "omitted reasoning",
+        "schema",
+        "malformed",
+    )
+    if any(marker in text for marker in markers):
+        return True
+    return re.search(r"http 5\d\d", text) is not None
+
+
 def _execute_one(
     participant: CouncilParticipant,
     packet: ContinuationPacket,
@@ -242,21 +273,41 @@ def _execute_one(
     round_number: int,
     prior_opinions: Iterable[CouncilOpinion],
 ) -> CouncilOpinion:
-    response = participant.fabric.execute(
-        model=participant.model,
-        messages=_messages(
-            packet=packet,
-            question=question,
-            participant=participant,
-            round_number=round_number,
-            prior_opinions=prior_opinions,
-        ),
-    )
-    return _opinion_from_payload(
-        payload=_json_object(response.content),
-        participant=participant,
-        packet=packet,
-        round_number=round_number,
+    models = (participant.model, *participant.alternates[:4])
+    failures: list[str] = []
+    for index, model in enumerate(models):
+        active = CouncilParticipant(
+            role=participant.role,
+            fabric=participant.fabric,
+            model=model,
+            local=participant.local,
+        )
+        try:
+            response = active.fabric.execute(
+                model=model,
+                messages=_messages(
+                    packet=packet,
+                    question=question,
+                    participant=active,
+                    round_number=round_number,
+                    prior_opinions=prior_opinions,
+                ),
+            )
+            return _opinion_from_payload(
+                payload=_json_object(response.content),
+                participant=active,
+                packet=packet,
+                round_number=round_number,
+            )
+        except Exception as exc:  # noqa: BLE001 - classify provider/schema failures centrally
+            if not _retryable_participant_error(exc):
+                raise
+            failures.append(f"{model}: {str(exc)[:300]}")
+            if index == len(models) - 1:
+                break
+    raise CouncilError(
+        f"Council participant {participant.role}:{participant.fabric.name} exhausted bounded model failover: "
+        + " | ".join(failures)
     )
 
 
