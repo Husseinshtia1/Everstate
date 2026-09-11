@@ -40,7 +40,13 @@ else
   export EVERSTATE_ENTERPRISE_STRICT="${EVERSTATE_ENTERPRISE_STRICT:-1}"
 fi
 
-if [[ "${EVERSTATE_REAL_RESET:-0}" == "1" && -e "$WORKSPACE" ]]; then
+if [[ "${EVERSTATE_REAL_RESUME:-0}" == "1" ]]; then
+  if [[ "${EVERSTATE_REAL_RESET:-0}" == "1" ]]; then
+    echo "Refusing contradictory REAL_RESUME=1 and REAL_RESET=1" >&2
+    exit 2
+  fi
+  ARGS+=(--resume)
+elif [[ "${EVERSTATE_REAL_RESET:-0}" == "1" && -e "$WORKSPACE" ]]; then
   case "$WORKSPACE" in
     "$HOME"/everstate-live/*) rm -rf -- "$WORKSPACE" ;;
     *)
