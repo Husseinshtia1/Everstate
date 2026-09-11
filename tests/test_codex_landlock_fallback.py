@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from everstate.providers import PROVIDERS
+from everstate.providers import PROVIDERS, ProviderAdapter
 
 
 def test_codex_automation_stays_on_workspace_write_managed_sandbox(monkeypatch):
@@ -18,7 +18,7 @@ def test_codex_automation_stays_on_workspace_write_managed_sandbox(monkeypatch):
 
 
 def test_codex_preflight_probes_managed_sandbox_without_inference(monkeypatch):
-    monkeypatch.setattr(PROVIDERS["codex"], "resolve_executable", lambda: "/usr/bin/codex")
+    monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/usr/bin/codex")
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
@@ -37,7 +37,7 @@ def test_codex_preflight_probes_managed_sandbox_without_inference(monkeypatch):
 
 
 def test_codex_preflight_explains_ubuntu_userns_failure(monkeypatch):
-    monkeypatch.setattr(PROVIDERS["codex"], "resolve_executable", lambda: "/usr/bin/codex")
+    monkeypatch.setattr(ProviderAdapter, "resolve_executable", lambda self: "/usr/bin/codex")
 
     def fake_run(command, **kwargs):
         if command[1:] == ["login", "status"]:
