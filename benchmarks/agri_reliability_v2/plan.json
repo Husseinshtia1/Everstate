@@ -1,0 +1,158 @@
+{
+  "name": "EVR-AGRI-RELIABILITY-002",
+  "objective": "Evolve the completed enterprise agricultural platform into an Agricultural Operations Reliability & Intelligence Platform that coordinates existing systems when reality deviates from plan, centered on canonical truth, exception detection, dependency impact, governed replanning, verified execution, learning, and quantified value.",
+  "decisions": [
+    "North Star: Make complex agricultural operations continue correctly when reality deviates from the plan.",
+    "The product loop is Connect -> Understand -> Detect Exception -> Determine Impact -> Collaborate -> Optimize -> Check Policy -> Approve -> Execute -> Verify -> Learn -> Quantify Value.",
+    "Do not build or market the platform as another FMIS, AI Agronomist, or digital twin for its own sake.",
+    "Existing customer systems remain in place; Everstate is the canonical operational reliability and control plane above them.",
+    "Use ADAPT-compatible agricultural semantics where useful, extended for ERP, logistics, agents, exceptions, outcomes, and finance.",
+    "Use a modular monolith plus separate workers until scale proves a need for service decomposition.",
+    "Use PostgreSQL/PostGIS as canonical operational truth, Timescale-compatible telemetry, S3-compatible object storage, Redis coordination, pgvector for document/search embeddings, event-bus abstraction, and durable workflow abstraction.",
+    "Foundation LLMs perform language/reasoning only; ML/time-series perform prediction; OR solvers perform optimization; deterministic policy performs compliance/safety.",
+    "Every action has expected and observed outcomes; every value claim is VERIFIED, ESTIMATED, or ATTRIBUTED.",
+    "Primary KPI is Exception Resolution Success Rate."
+  ],
+  "constraints": [
+    "Never let a connector provider become a single point of business failure.",
+    "Never treat provider-specific identifiers as canonical identity without entity resolution.",
+    "Never allow a high-risk action using stale critical facts without refresh or explicit policy handling.",
+    "Never allow free-form agent chat to become operational state; agent findings are structured and evidence-linked.",
+    "Never use an LLM as the compliance engine, source of truth, numeric optimizer, or success verifier.",
+    "Never allow cross-tenant access, unscoped agent tools, duplicate writes, or unaudited critical actions.",
+    "Never claim execution success before an observed verification event.",
+    "Preserve protected MASTER_PRODUCT_ENGINEERING_PLAN_V2.md and verify_reliability.py exactly.",
+    "Every stage must preserve all earlier passing capabilities."
+  ],
+  "failed_attempts": [
+    "Competing on farm-data aggregation alone is rejected because major agriculture platforms already aggregate sensors, machinery, irrigation, imagery, and agronomy.",
+    "A dashboard-first or chatbot-first wedge is rejected because it does not solve cross-system exception resolution.",
+    "A giant multi-agent architecture from day one is rejected; start with Supervisor plus Agronomy, Operations, Weather/Risk, and Compliance.",
+    "A vendor-dependent canonical model is rejected because provider access and commercial partnerships can change."
+  ],
+  "blockers": [
+    "Commercial connector credentials may be unavailable during benchmark execution; every connector must support deterministic mock/sandbox behavior.",
+    "Benchmark execution must not actuate physical equipment, issue real payments, or perform real chemical application.",
+    "Commercial pilot and autonomy gates require external evidence beyond repository-only acceptance and therefore must remain fail-closed in benchmark mode."
+  ],
+  "protected_files": ["MASTER_PRODUCT_ENGINEERING_PLAN_V2.md", "verify_reliability.py"],
+  "stages": [
+    {
+      "id": "g0-model",
+      "title": "G0 Canonical operational model and Agricultural Identity Graph",
+      "task": "Refactor and extend the existing agricultural domain into the v2 canonical operational model: Organization, Farm, Field, CropCycle, Machine, Sensor, Worker, Task, Input, Inventory, Supplier, Contract, Shipment, Regulation, Event, Exception, Action, Outcome. Implement provider aliases, entity-resolution evidence/confidence, tenant-safe identity mapping, and ADAPT-aligned equipment/spatial/operation semantics without provider lock-in.",
+      "next_action": "Build capability-oriented connector control plane and provider-independent ingestion.",
+      "required_changed_files": ["backend/app/domain/models.py", "backend/app/identity/entity_resolution.py", "backend/app/identity/identity_graph.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g0-model"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g1-observe",
+      "title": "G1 Connector control plane, provenance, freshness, and World State",
+      "task": "Implement Connector SDK/control-plane contracts for authentication, capability manifests, mappings, reads/writes/events, polling, rate limits, retries, health, version and permissions. Add CSV/Excel/GeoJSON, weather, satellite and internal task adapters with deterministic mocks. Extend provenance/freshness/quality/confidence and produce coherent multi-source Agricultural World State.",
+      "next_action": "Turn material changes into typed events and operational exceptions.",
+      "required_changed_files": ["backend/app/connectors/base.py", "backend/app/connectors/registry.py", "backend/app/world_state/service.py", "backend/app/world_state/freshness.py", "backend/app/provenance/service.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g1-observe"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g2-detect",
+      "title": "G2 Event, Exception, Dependency Graph, and Impact Engine",
+      "task": "Implement typed operational events, Exception lifecycle, dependency traversal across fields/cycles/tasks/workers/machines/storage/shipments/contracts/customers, time-to-impact, severity, affected value, and multidimensional impact estimates for yield/revenue/cost/quality/compliance/safety/water/utilization/time. An Event becomes an Exception only when it threatens or invalidates the current plan.",
+      "next_action": "Add evidence/uncertainty boundaries and read-only AI explanation.",
+      "required_changed_files": ["backend/app/events/models.py", "backend/app/exceptions/models.py", "backend/app/exceptions/service.py", "backend/app/dependencies/service.py", "backend/app/impact/service.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g2-detect"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g3-explain",
+      "title": "G3 Evidence, uncertainty, and read-only intelligence",
+      "task": "Implement evidence bundles that separate known/inferred/unknown facts, deterministic confidence composition from source quality/freshness/agreement/calibration/missingness, stale-critical-data blocking, and a read-only ModelGateway for reason/extract/vision/embed/classify. AI explanations may cite verified facts but may not invent operational state.",
+      "next_action": "Build structured Supervisor and initial agent workforce over a scoped Problem Workspace.",
+      "required_changed_files": ["backend/app/evidence/service.py", "backend/app/evidence/confidence.py", "backend/app/models/gateway.py", "backend/app/security/untrusted_data.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g3-explain"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g4-resolve",
+      "title": "G4 Supervisor, structured agents, and shared blackboard",
+      "task": "Implement Supervisor plus Agronomy, Operations, Weather/Risk, and Compliance agents using structured message contracts only. Build a per-Exception Problem Workspace containing goal, verified/unknown facts, constraints, findings, conflicts, candidate actions/plans, evidence, decision and outcome. Enforce scoped Agent Identity permissions.",
+      "next_action": "Add deterministic feasibility filtering and OR optimization for candidate plans.",
+      "required_changed_files": ["backend/app/agents/supervisor.py", "backend/app/agents/contracts.py", "backend/app/agents/registry.py", "backend/app/agents/blackboard.py", "backend/app/agents/identity.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g4-resolve"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g5-optimize",
+      "title": "G5 Feasibility, optimization, risk, and economic plan scoring",
+      "task": "Implement candidate-plan feasibility filters and OR-solver interfaces for tasks, machines, workers, weather windows, contractual deadlines, inventory and travel constraints. Return multiple feasible plans such as maximum risk reduction, minimum cost and balanced. Score risk and economics deterministically; LLMs do not choose conflicting facts by opinion.",
+      "next_action": "Put deterministic policy and approval gates before every controlled action.",
+      "required_changed_files": ["backend/app/intelligence/optimization.py", "backend/app/plans/models.py", "backend/app/plans/service.py", "backend/app/finance/scoring.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g5-optimize"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g6-govern",
+      "title": "G6 Policy-before-action, approvals, Data Vault, and agent security",
+      "task": "Implement OPA-style deterministic policy decisions ALLOW, ALLOW_AND_LOG, REQUIRE_APPROVAL, REQUIRE_DUAL_APPROVAL, DENY; approval workflows; Data Vault capability visibility/revocation; and Agent Identity controls for read/write/tool/financial/farm/jurisdiction scopes. Ensure chemical, purchase, payment, irrigation and shipment actions cannot bypass policy.",
+      "next_action": "Execute approved actions durably and verify observed outcomes.",
+      "required_changed_files": ["backend/app/policy/engine.py", "backend/app/approvals/service.py", "backend/app/data_vault/service.py", "backend/app/actions/models.py", "backend/app/tools/registry.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g6-govern"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g7-execute",
+      "title": "G7 Durable execution, idempotency, compensation, and verification",
+      "task": "Implement durable workflow contracts for long-running exception resolution, idempotency keys on every write, reversible/irreversible action metadata, compensation actions where valid, internal task/message execution, and explicit verification events. No action may be marked successful until verification is observed.",
+      "next_action": "Run the same exception workflow through real/sandbox external integrations.",
+      "required_changed_files": ["backend/app/workflows/definitions.py", "backend/app/actions/executor.py", "backend/app/actions/idempotency.py", "backend/app/actions/verification.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g7-execute"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g8-integrate",
+      "title": "G8 Machinery, ERP, IoT, and communication integrations",
+      "task": "Implement capability adapters and deterministic sandbox contracts for Generic MQTT, John Deere, Odoo, OneSoil/CropX partner-style agronomy data, WhatsApp-style messaging, and extension points for SAP/Dynamics/irrigation/logistics. Preserve source independence and connector health/failover semantics.",
+      "next_action": "Track action outcomes and quantify verified operational value.",
+      "required_changed_files": ["backend/app/connectors/mqtt.py", "backend/app/connectors/deere.py", "backend/app/connectors/odoo.py", "backend/app/connectors/agronomy.py", "backend/app/connectors/messaging.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g8-integrate"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g9-learn",
+      "title": "G9 Outcome Engine, Decision-to-Outcome dataset, and ROI Ledger",
+      "task": "Implement expected-vs-observed outcomes, prediction error, operational/agronomic/financial impact, Decision -> Action -> Outcome records, and ROI Ledger entries classified VERIFIED, ESTIMATED, or ATTRIBUTED. Add model-registry hooks for future Action->Outcome learning without training a foundation model.",
+      "next_action": "Prove the product wedge through deterministic scenarios and a commercial-pilot package.",
+      "required_changed_files": ["backend/app/outcomes/models.py", "backend/app/outcomes/service.py", "backend/app/roi/ledger.py", "backend/app/intelligence/model_registry.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g9-learn"]}],
+      "max_attempts": 3
+    },
+    {
+      "id": "g10-pilot",
+      "title": "G10 MVP scenario, exception-centric UX, and pilot readiness",
+      "task": "Build the first complete weather-driven operations exception demo over fields/crop/workers/machines/inventory plus weather/satellite: detect changed forecast, identify affected irrigation/spraying/harvest tasks, produce Plan A/B/C with cost/risk/compliance, approve one plan, update tasks, notify workers, verify outcome, and record ROI. Make Attention and Exception detail the primary UX; map/chat are contextual interfaces.",
+      "next_action": "Harden enterprise reliability/security and expand the deterministic benchmark suite toward 100 scenarios.",
+      "required_changed_files": ["frontend/app/app/attention/page.tsx", "frontend/app/app/exceptions/[id]/page.tsx", "backend/app/demo/weather_exception.py", "backend/app/evaluation/scenarios.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g10-pilot"]}],
+      "max_attempts": 4
+    },
+    {
+      "id": "g11-enterprise",
+      "title": "G11 Enterprise release blockers, observability, SSO/HA readiness, and scenario benchmark",
+      "task": "Enforce production blockers for tenant leaks, unauthorized actions, policy override, duplicate writes, stale-critical actions, hallucinated machine state, bad identity resolution, unrecoverable workflows, missing audit, and unverified success. Expand deterministic scenarios, observability, runbooks, SSO/HA interfaces and deployment controls while preserving the exception-resolution KPI model.",
+      "next_action": "Define only selected policy-proven closed loops for future autonomy.",
+      "required_changed_files": ["backend/app/evaluation/release_blockers.py", "backend/app/observability/telemetry.py", "docs/runbooks/operations.md", "docs/security.md"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g11-enterprise"]}],
+      "max_attempts": 4
+    },
+    {
+      "id": "g12-autonomy",
+      "title": "G12 Selected closed-loop autonomy contracts",
+      "task": "Define and implement only explicitly selected low/controlled-risk closed-loop automation contracts with deterministic policy, freshness, idempotency, rollback/compensation where possible, verification, operator override and audit. Keep chemical application, payments and other critical irreversible actions human-authorized unless separate external acceptance proves otherwise.",
+      "next_action": "Operate adaptively from verified Decision -> Action -> Outcome evidence while preserving human governance and release blockers.",
+      "required_changed_files": ["backend/app/autonomy/contracts.py", "backend/app/autonomy/controller.py", "backend/app/evaluation/autonomy.py"],
+      "validation_commands": [{"command": ["python", "verify_reliability.py", "--stage", "g12-autonomy"]}],
+      "max_attempts": 4
+    }
+  ]
+}
