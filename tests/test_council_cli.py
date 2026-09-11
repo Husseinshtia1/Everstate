@@ -52,7 +52,7 @@ def test_cloud_allowed_can_use_multiple_fabrics(monkeypatch):
     assert [participant.fabric.name for participant in participants] == ["ypipe", "freellmapi", "omniroute"]
 
 
-def test_freellmapi_council_prefers_direct_schema_reliable_models():
+def test_freellmapi_council_prefers_callable_direct_models_over_group_aliases():
     models = (
         "auto",
         "allam-2-7b",
@@ -60,20 +60,23 @@ def test_freellmapi_council_prefers_direct_schema_reliable_models():
         "claude-opus-4-5",
         "claude-sonnet-4-5",
         "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gpt-oss-120b",
         "gpt-oss-safeguard-20b",
     )
 
     ranked = _council_model_order("freellmapi", models)
 
     assert ranked[:3] == (
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
         "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gpt-oss-120b",
     )
+    assert ranked.index("claude-sonnet-4-5") > 2
     assert ranked.index("auto") > 2
 
 
-def test_select_participants_uses_ranked_freellmapi_targets_when_only_remote_ready(monkeypatch):
+def test_select_participants_uses_callable_ranked_freellmapi_targets_when_only_remote_ready(monkeypatch):
     def fake_safe(name, factory):
         if name == "freellmapi":
             fabric = FakeFabric(name)
@@ -85,6 +88,8 @@ def test_select_participants_uses_ranked_freellmapi_targets_when_only_remote_rea
                     "claude-opus-4-5",
                     "claude-sonnet-4-5",
                     "gemini-3.6-flash",
+                    "gemini-3.5-flash",
+                    "gpt-oss-120b",
                 )
             )
             return fabric, FabricHealth("READY", True, "test"), targets
@@ -100,7 +105,7 @@ def test_select_participants_uses_ranked_freellmapi_targets_when_only_remote_rea
     )
 
     assert [participant.model for participant in participants] == [
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
         "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gpt-oss-120b",
     ]
