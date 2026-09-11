@@ -23,13 +23,11 @@ console = Console()
 _DEFAULT_ROLES = ("architect", "critic", "verifier")
 _ORCHESTRATORS = {"auto", "ruflo", "native"}
 
-# FreeLLMAPI exposes both direct models and virtual/meta targets. AgentCouncil
-# needs schema fidelity and predictable latency more than router breadth, so
-# prefer strong direct instruction/reasoning models when they are currently
-# ready. Unknown ready models remain eligible after this preference list.
+# FreeLLMAPI may expose unified/group ids through /v1/models that older
+# /chat/completions builds cannot dispatch directly. Prefer targets that have
+# proven to be direct callable ids across current deployments before group-like
+# aliases. Unknown ready models remain eligible after this preference list.
 _FREELLMAPI_COUNCIL_PREFERRED_MODELS = (
-    "claude-sonnet-4-5",
-    "claude-opus-4-5",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gpt-oss-120b",
@@ -41,6 +39,8 @@ _FREELLMAPI_COUNCIL_PREFERRED_MODELS = (
     "north-mini-code",
     "compound",
     "compound-mini",
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
 )
 
 
