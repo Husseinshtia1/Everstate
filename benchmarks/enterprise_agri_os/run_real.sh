@@ -11,6 +11,10 @@ PROVIDER="${2:-codex}"
 # when validating Ruflo itself and you want failures to be fatal.
 ORCHESTRATOR="${3:-auto}"
 
+# Five seconds is enough for catalog discovery but too short for independent
+# council reasoning on free/shared providers. Operators can still override this.
+export EVERSTATE_FREELLMAPI_TIMEOUT="${EVERSTATE_FREELLMAPI_TIMEOUT:-45}"
+
 ARGS=(
   autobuild
   --plan "$BENCHMARK/plan.json"
