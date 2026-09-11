@@ -87,6 +87,33 @@ class ProviderAdapter:
         detail = (completed.stdout or completed.stderr).strip()
         if completed.returncode != 0:
             return False, detail or f"{self.name} readiness probe exited {completed.returncode}."
+
+        if self.executable == "codex" and _env_truthy("EVERSTATE_CODEX_LEGACY_LANDLOCK"):
+            try:
+                sandbox_probe = subprocess.run(
+                    [
+                        executable,
+                        "-c",
+                        "use_legacy_landlock=true",
+                        "sandbox",
+                        "linux",
+                        "/bin/true",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=timeout,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return False, f"Codex Landlock sandbox probe failed: {exc}"
+            sandbox_detail = (sandbox_probe.stderr or sandbox_probe.stdout).strip()
+            if sandbox_probe.returncode != 0:
+                return False, (
+                    "Codex legacy Landlock sandbox is not usable on this host: "
+                    + (sandbox_detail or f"exit={sandbox_probe.returncode}")
+                )
+            return True, f"{detail or self.name + ' headless automation is ready.'}; legacy Landlock sandbox probe passed."
+
         return True, detail or f"{self.name} headless automation is ready."
 
     def selected_model(self) -> str | None:
