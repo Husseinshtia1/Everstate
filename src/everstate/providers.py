@@ -221,13 +221,17 @@ PROVIDERS: dict[str, ProviderAdapter] = {
         name="Codex",
         executable="codex",
         # Current Codex exposes non-interactive execution through `codex exec`.
-        # Keep the benchmark sandboxed and remove approval prompts explicitly
-        # through config overrides instead of relying on legacy convenience flags.
+        # Keep the benchmark sandboxed and remove approval prompts explicitly.
+        # Everstate's AgentCouncil is the independent review/orchestration layer;
+        # nested Codex multi-agent spawning adds no authority and has produced
+        # orphan-thread failures in real runs, so disable it for automation.
         automation_args=(
             "-c",
             'approval_policy="never"',
             "-c",
             "sandbox_workspace_write.network_access=false",
+            "-c",
+            "agents.enabled=false",
             "exec",
             "--sandbox",
             "workspace-write",
