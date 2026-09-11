@@ -92,10 +92,14 @@ class FreeLLMAPIFabric:
         return decoded
 
     def discover_targets(self) -> tuple[FabricTarget, ...]:
-        payload = self._request_json("GET", "models")
+        # FreeLLMAPI intentionally exposes the full catalog from /v1/models,
+        # including models whose provider is not currently configured. Council
+        # participants must be executable now, so use the readiness-filtered
+        # endpoint rather than treating catalog visibility as execution health.
+        payload = self._request_json("GET", "models?ready=true")
         rows = payload.get("data")
         if not isinstance(rows, list):
-            raise FreeLLMAPIError("FreeLLMAPI /models response is missing a data list")
+            raise FreeLLMAPIError("FreeLLMAPI /models?ready=true response is missing a data list")
         targets: list[FabricTarget] = []
         for row in rows:
             if not isinstance(row, dict):
@@ -105,9 +109,8 @@ class FreeLLMAPIFabric:
                 continue
             provider = row.get("owned_by") if isinstance(row.get("owned_by"), str) else None
             targets.append(FabricTarget(id=model_id, provider=provider, model=model_id))
-        # FreeLLMAPI exposes a virtual `auto` model for its own smart router.
-        # Prefer it when available so Everstate delegates provider/model failover
-        # to the service instead of pinning an arbitrary first catalog entry.
+        # Prefer the virtual auto router when it is itself reported as ready,
+        # then stable-sort the remaining currently servable targets.
         targets.sort(key=lambda target: (target.id != "auto", target.id))
         return tuple(targets)
 
@@ -117,8 +120,16 @@ class FreeLLMAPIFabric:
         except FreeLLMAPIError as exc:
             return FabricHealth(status="UNAVAILABLE", ready=False, detail=str(exc))
         if not targets:
-            return FabricHealth(status="DEGRADED", ready=False, detail="FreeLLMAPI is reachable but reported no models.")
-        return FabricHealth(status="READY", ready=True, detail=f"FreeLLMAPI is reachable with {len(targets)} model target(s).")
+            return FabricHealth(
+                status="DEGRADED",
+                ready=False,
+                detail="FreeLLMAPI is reachable but reported no currently servable model targets.",
+            )
+        return FabricHealth(
+            status="READY",
+            ready=True,
+            detail=f"FreeLLMAPI is reachable with {len(targets)} ready model target(s).",
+        )
 
     def execute(self, *, model: str, messages: list[dict], timeout: float | None = None) -> FabricResponse:
         if not model.strip():

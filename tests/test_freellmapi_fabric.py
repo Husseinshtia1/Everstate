@@ -28,7 +28,7 @@ def test_config_reads_env_and_hides_secret(monkeypatch, tmp_path) -> None:
     assert "secret" not in repr(config)
 
 
-def test_models_endpoint_prefers_virtual_auto_target() -> None:
+def test_models_endpoint_uses_ready_filter_and_prefers_virtual_auto_target() -> None:
     captured = {}
 
     def opener(request, *, timeout):
@@ -41,9 +41,20 @@ def test_models_endpoint_prefers_virtual_auto_target() -> None:
         opener=opener,
     )
     targets = fabric.discover_targets()
-    assert captured["url"] == "http://127.0.0.1:3001/v1/models"
+    assert captured["url"] == "http://127.0.0.1:3001/v1/models?ready=true"
     assert captured["authorization"] == "Bearer unified"
     assert [target.id for target in targets] == ["auto", "a-model", "z-model"]
+
+
+def test_health_requires_currently_servable_models() -> None:
+    def opener(request, *, timeout):
+        assert request.full_url.endswith("/models?ready=true")
+        return FakeResponse({"data": []})
+
+    health = FreeLLMAPIFabric(opener=opener).health()
+    assert health.ready is False
+    assert health.status == "DEGRADED"
+    assert "currently servable" in health.detail
 
 
 def test_execute_is_openai_compatible() -> None:

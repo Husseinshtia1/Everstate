@@ -5,7 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BENCHMARK="$ROOT/benchmarks/enterprise_agri_os"
 WORKSPACE="${1:-$HOME/everstate-live/EVR-AGRI-ENTERPRISE-001}"
 PROVIDER="${2:-codex}"
-ORCHESTRATOR="${3:-ruflo}"
+# Ruflo is an optional coordination layer, not the canonical execution authority.
+# Auto mode prefers Ruflo when healthy and falls back to Everstate's native
+# council orchestration if Ruflo fails at runtime. Pass "ruflo" explicitly only
+# when validating Ruflo itself and you want failures to be fatal.
+ORCHESTRATOR="${3:-auto}"
 
 ARGS=(
   autobuild
