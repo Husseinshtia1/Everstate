@@ -23,6 +23,43 @@ console = Console()
 _DEFAULT_ROLES = ("architect", "critic", "verifier")
 _ORCHESTRATORS = {"auto", "ruflo", "native"}
 
+# FreeLLMAPI exposes both direct models and virtual/meta targets. AgentCouncil
+# needs schema fidelity and predictable latency more than router breadth, so
+# prefer strong direct instruction/reasoning models when they are currently
+# ready. Unknown ready models remain eligible after this preference list.
+_FREELLMAPI_COUNCIL_PREFERRED_MODELS = (
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gpt-oss-120b",
+    "qwen3.6-27b",
+    "command-a-reasoning",
+    "command-a",
+    "deepseek-v4-flash",
+    "nemotron-3-ultra",
+    "north-mini-code",
+    "compound",
+    "compound-mini",
+)
+
+
+def _council_model_order(fabric_name: str, models: tuple[str, ...]) -> tuple[str, ...]:
+    if fabric_name != "freellmapi":
+        return models
+    preferred = {model: index for index, model in enumerate(_FREELLMAPI_COUNCIL_PREFERRED_MODELS)}
+    original = {model: index for index, model in enumerate(models)}
+    return tuple(
+        sorted(
+            models,
+            key=lambda model: (
+                0 if model in preferred else 1,
+                preferred.get(model, len(preferred)),
+                original[model],
+            ),
+        )
+    )
+
 
 def _safe_fabric(name: str, factory):
     if not fabric_enabled(name):
@@ -74,7 +111,8 @@ def _select_participants(packet, roles: tuple[str, ...], max_agents: int):
             "targets": [target.id for target in targets],
         }
         if fabric is not None and health.ready and targets:
-            candidate_groups.append((fabric, tuple(target.id for target in targets)))
+            model_ids = tuple(target.id for target in targets)
+            candidate_groups.append((fabric, _council_model_order(name, model_ids)))
 
     if local_only:
         health_report["freellmapi"] = {
