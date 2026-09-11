@@ -35,6 +35,7 @@ class CouncilParticipant:
     fabric: ExecutionFabric
     model: str
     local: bool | None = None
+    alternates: tuple[str, ...] = ()
 
     @property
     def id(self) -> str:
@@ -235,6 +236,70 @@ def _messages(
     ]
 
 
+def _retryable_participant_error(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    if "identity drift" in text:
+        return False
+    if isinstance(exc, TimeoutError):
+        return True
+    markers = (
+        "http 429",
+        "rate_limit",
+        "rate limit",
+        "rate-limited",
+        "cooldown",
+        "all models exhausted",
+        "model_not_found",
+        "model not found",
+        "http 404",
+        "timeout",
+        "timed out",
+        "non-json output",
+        "must return one json object",
+        "omitted recommendation",
+        "omitted reasoning",
+        "schema",
+        "malformed",
+    )
+    if any(marker in text for marker in markers):
+        return True
+    return re.search(r"http 5\d\d", text) is not None
+
+
+def _with_discovered_alternates(
+    participants: tuple[CouncilParticipant, ...],
+) -> tuple[CouncilParticipant, ...]:
+    enriched = list(participants)
+    groups: dict[int, list[int]] = {}
+    for index, participant in enumerate(participants):
+        if participant.alternates:
+            continue
+        groups.setdefault(id(participant.fabric), []).append(index)
+
+    for indices in groups.values():
+        exemplar = participants[indices[0]]
+        try:
+            targets = exemplar.fabric.discover_targets()
+        except Exception:  # noqa: BLE001 - discovery failure must not erase the primary path
+            continue
+        primary_models = {participants[index].model for index in indices}
+        remaining = [target.id for target in targets if target.id not in primary_models]
+        if not remaining:
+            continue
+        width = len(indices)
+        for position, participant_index in enumerate(indices):
+            participant = participants[participant_index]
+            alternates = tuple(remaining[position::width][:4])
+            enriched[participant_index] = CouncilParticipant(
+                role=participant.role,
+                fabric=participant.fabric,
+                model=participant.model,
+                local=participant.local,
+                alternates=alternates,
+            )
+    return tuple(enriched)
+
+
 def _execute_one(
     participant: CouncilParticipant,
     packet: ContinuationPacket,
@@ -242,21 +307,41 @@ def _execute_one(
     round_number: int,
     prior_opinions: Iterable[CouncilOpinion],
 ) -> CouncilOpinion:
-    response = participant.fabric.execute(
-        model=participant.model,
-        messages=_messages(
-            packet=packet,
-            question=question,
-            participant=participant,
-            round_number=round_number,
-            prior_opinions=prior_opinions,
-        ),
-    )
-    return _opinion_from_payload(
-        payload=_json_object(response.content),
-        participant=participant,
-        packet=packet,
-        round_number=round_number,
+    models = (participant.model, *participant.alternates[:4])
+    failures: list[str] = []
+    for index, model in enumerate(models):
+        active = CouncilParticipant(
+            role=participant.role,
+            fabric=participant.fabric,
+            model=model,
+            local=participant.local,
+        )
+        try:
+            response = active.fabric.execute(
+                model=model,
+                messages=_messages(
+                    packet=packet,
+                    question=question,
+                    participant=active,
+                    round_number=round_number,
+                    prior_opinions=prior_opinions,
+                ),
+            )
+            return _opinion_from_payload(
+                payload=_json_object(response.content),
+                participant=active,
+                packet=packet,
+                round_number=round_number,
+            )
+        except Exception as exc:  # noqa: BLE001 - classify provider/schema failures centrally
+            if not _retryable_participant_error(exc):
+                raise
+            failures.append(f"{model}: {str(exc)[:300]}")
+            if index == len(models) - 1:
+                break
+    raise CouncilError(
+        f"Council participant {participant.role}:{participant.fabric.name} exhausted bounded model failover: "
+        + " | ".join(failures)
     )
 
 
@@ -269,12 +354,13 @@ def _parallel_round(
 ) -> tuple[tuple[CouncilOpinion, ...], tuple[CouncilFailure, ...]]:
     if not participants:
         raise CouncilError("AgentCouncil requires at least one participant")
+    active_participants = _with_discovered_alternates(participants)
     results: list[CouncilOpinion] = []
     failures: list[CouncilFailure] = []
-    with ThreadPoolExecutor(max_workers=min(8, len(participants))) as pool:
+    with ThreadPoolExecutor(max_workers=min(8, len(active_participants))) as pool:
         futures = {
             pool.submit(_execute_one, participant, packet, question, round_number, prior_opinions): participant
-            for participant in participants
+            for participant in active_participants
         }
         for future in as_completed(futures):
             participant = futures[future]

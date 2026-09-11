@@ -43,6 +43,36 @@ class FakeFabric:
         return FabricResponse(target=model, content=json.dumps(payload), raw=payload)
 
 
+class FailoverFabric(FakeFabric):
+    def __init__(self, *, fail_models: set[str], drift_models: set[str] | None = None):
+        super().__init__("freellmapi", "approve")
+        self.fail_models = fail_models
+        self.drift_models = drift_models or set()
+        self.models_called: list[str] = []
+
+    def discover_targets(self):
+        return tuple(
+            FabricTarget(id=model, provider=self.name, model=model)
+            for model in ("primary-a", "primary-b", "fallback-a", "fallback-b", "fallback-c", "fallback-d")
+        )
+
+    def execute(self, *, model: str, messages: list[dict], timeout: float | None = None):
+        self.models_called.append(model)
+        if model in self.fail_models:
+            raise RuntimeError('FreeLLMAPI HTTP 429: {"error":{"code":"rate_limit_exceeded"}}')
+        payload = {
+            "everstate_project_id": "proj_other" if model in self.drift_models else self.project_id,
+            "everstate_state_version": self.state_version,
+            "recommendation": self.recommendation,
+            "reasoning": f"reasoning from {model}",
+            "risks": [],
+            "evidence": [f"evidence-{model}"],
+            "conflicts": [],
+            "confidence": 0.9,
+        }
+        return FabricResponse(target=model, content=json.dumps(payload), raw=payload)
+
+
 def packet() -> ContinuationPacket:
     return ContinuationPacket(
         project_id="proj_test",
@@ -129,3 +159,33 @@ def test_fenced_json_is_accepted():
         participants=(CouncilParticipant("reviewer", fabric, "fenced-model"),),
     )
     assert result.consensus == "CONSENSUS: approve"
+
+
+def test_rate_limited_roles_fail_over_to_distinct_ready_models():
+    fabric = FailoverFabric(fail_models={"primary-a", "primary-b"})
+    result = execute_agent_council(
+        packet=packet(),
+        question="Review despite cooldowns",
+        participants=(
+            CouncilParticipant("architect", fabric, "primary-a"),
+            CouncilParticipant("critic", fabric, "primary-b"),
+        ),
+        min_successful=2,
+    )
+
+    assert result.quorum_met is True
+    assert {opinion.model for opinion in result.opinions} == {"fallback-a", "fallback-b"}
+    assert all(opinion.fabric == "freellmapi" for opinion in result.opinions)
+
+
+def test_identity_drift_does_not_try_alternate_model():
+    fabric = FailoverFabric(fail_models=set(), drift_models={"primary-a"})
+    with pytest.raises(CouncilError, match="quorum not met") as excinfo:
+        execute_agent_council(
+            packet=packet(),
+            question="Do not mask identity drift",
+            participants=(CouncilParticipant("architect", fabric, "primary-a", alternates=("fallback-a",)),),
+        )
+
+    assert "identity drift" in str(excinfo.value)
+    assert fabric.models_called == ["primary-a"]

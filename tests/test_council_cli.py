@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from everstate.continuity import ContinuationPacket
-from everstate.council_cli import _select_participants
+from everstate.council_cli import _council_model_order, _select_participants
 from everstate.provider_fabric import FabricHealth, FabricTarget
 
 
@@ -50,3 +50,62 @@ def test_cloud_allowed_can_use_multiple_fabrics(monkeypatch):
 
     assert local_only is False
     assert [participant.fabric.name for participant in participants] == ["ypipe", "freellmapi", "omniroute"]
+
+
+def test_freellmapi_council_prefers_callable_direct_models_over_group_aliases():
+    models = (
+        "auto",
+        "allam-2-7b",
+        "aya-expanse-32b",
+        "claude-opus-4-5",
+        "claude-sonnet-4-5",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gpt-oss-120b",
+        "gpt-oss-safeguard-20b",
+    )
+
+    ranked = _council_model_order("freellmapi", models)
+
+    assert ranked[:3] == (
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gpt-oss-120b",
+    )
+    assert ranked.index("claude-sonnet-4-5") > 2
+    assert ranked.index("auto") > 2
+
+
+def test_select_participants_uses_callable_ranked_freellmapi_targets_when_only_remote_ready(monkeypatch):
+    def fake_safe(name, factory):
+        if name == "freellmapi":
+            fabric = FakeFabric(name)
+            targets = tuple(
+                FabricTarget(id=model)
+                for model in (
+                    "auto",
+                    "allam-2-7b",
+                    "claude-opus-4-5",
+                    "claude-sonnet-4-5",
+                    "gemini-3.6-flash",
+                    "gemini-3.5-flash",
+                    "gpt-oss-120b",
+                )
+            )
+            return fabric, FabricHealth("READY", True, "test"), targets
+        return None, FabricHealth("UNAVAILABLE", False, "test"), ()
+
+    monkeypatch.setattr("everstate.council_cli._safe_fabric", fake_safe)
+    packet = ContinuationPacket(project_id="proj_remote", state_version=9)
+
+    participants, _, _ = _select_participants(
+        packet,
+        ("architect", "critic", "verifier"),
+        3,
+    )
+
+    assert [participant.model for participant in participants] == [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gpt-oss-120b",
+    ]

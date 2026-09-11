@@ -161,3 +161,73 @@ def test_phased_autobuild_dry_run_contacts_no_coding_agent(tmp_path: Path, monke
     assert provider.calls == 0
     assert len(run.stages) == 2
     assert all(not stage.attempts for stage in run.stages)
+
+
+def test_resume_revalidates_passed_stage_and_continues_without_rebuilding_it(tmp_path: Path, monkeypatch) -> None:
+    _patch_council(monkeypatch)
+    service = EverstateService(LocalStore(tmp_path / "state.db"))
+    template = _template(tmp_path)
+    workspace = tmp_path / "workspace"
+
+    first_provider = FakeProvider(always_fail=True)
+    first = run_phased_autobuild(
+        service=service,
+        template=template,
+        workspace=workspace,
+        plan=_plan(max_attempts=1),
+        provider=first_provider,
+        orchestrator="native",
+    )
+    assert first.passed is False
+    assert first_provider.calls == 1
+
+    # Simulate useful work written before a provider later exited non-zero.
+    (workspace / "one.txt").write_text("completed stage-one\n", encoding="utf-8")
+    second_provider = FakeProvider()
+    resumed = run_phased_autobuild(
+        service=service,
+        template=template,
+        workspace=workspace,
+        plan=_plan(max_attempts=1),
+        provider=second_provider,
+        orchestrator="native",
+        resume=True,
+    )
+
+    assert resumed.passed is True
+    # Existing stage-one work validates locally, so only stage-two needs a model call.
+    assert second_provider.calls == 1
+    assert [stage.passed for stage in resumed.stages] == [True, True]
+    assert resumed.stages[0].attempt_count == 1
+    assert (resumed.artifacts_dir / "01-stage-one" / "resume-existing-work.json").is_file()
+
+
+def test_resume_refuses_if_previously_passed_stage_regressed(tmp_path: Path, monkeypatch) -> None:
+    _patch_council(monkeypatch)
+    service = EverstateService(LocalStore(tmp_path / "state.db"))
+    template = _template(tmp_path)
+    workspace = tmp_path / "workspace"
+    provider = FakeProvider()
+
+    first = run_phased_autobuild(
+        service=service,
+        template=template,
+        workspace=workspace,
+        plan=_plan(),
+        provider=provider,
+        orchestrator="native",
+    )
+    assert first.passed is True
+    (workspace / "one.txt").unlink()
+
+    import pytest
+    with pytest.raises(RuntimeError, match="previously passed stage stage-one no longer validates"):
+        run_phased_autobuild(
+            service=service,
+            template=template,
+            workspace=workspace,
+            plan=_plan(),
+            provider=FakeProvider(),
+            orchestrator="native",
+            resume=True,
+        )

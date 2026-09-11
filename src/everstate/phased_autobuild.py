@@ -89,6 +89,11 @@ class StageRun:
     attempts: tuple[StageAttempt, ...]
     council_backend: str
     council_participants: int
+    prior_attempts: int = 0
+
+    @property
+    def attempt_count(self) -> int:
+        return self.prior_attempts + len(self.attempts)
 
 
 @dataclass(frozen=True)
@@ -177,6 +182,19 @@ def _stage_prompt(
     )
 
 
+def _load_resume_summary(workspace: Path, plan: AutobuildPlan) -> dict:
+    summary_path = workspace / ".everstate" / "autobuild" / plan.name / "summary.json"
+    if not summary_path.is_file():
+        raise ValueError(f"Cannot resume {plan.name}: summary not found: {summary_path}")
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot resume {plan.name}: invalid summary: {exc}") from exc
+    if summary.get("plan") != plan.name:
+        raise ValueError("Cannot resume autobuild: workspace summary belongs to a different plan")
+    return summary
+
+
 def run_phased_autobuild(
     *,
     service: EverstateService,
@@ -187,6 +205,7 @@ def run_phased_autobuild(
     orchestrator: str = "ruflo",
     min_council_agents: int = 2,
     dry_run: bool = False,
+    resume: bool = False,
 ) -> AutobuildRun:
     if not getattr(provider, "automation_supported", False):
         raise RuntimeError(f"{provider.name} has no verified headless automation contract")
@@ -194,14 +213,74 @@ def run_phased_autobuild(
     if not ready:
         raise RuntimeError(f"Primary coding provider {provider.name} is not ready: {detail}")
 
-    root = prepare_workspace(template, workspace)
-    _seed_plan(service, root, plan)
+    prior_summary: dict | None = None
+    prior_by_id: dict[str, dict] = {}
+    if resume:
+        root = workspace.resolve()
+        if not root.is_dir() or not any(root.iterdir()):
+            raise ValueError(f"Cannot resume autobuild from absent or empty workspace: {root}")
+        prior_summary = _load_resume_summary(root, plan)
+        prior_by_id = {str(item.get("id")): item for item in prior_summary.get("stages", [])}
+        service.init_project(root)
+    else:
+        root = prepare_workspace(template, workspace)
+        _seed_plan(service, root, plan)
+
     artifacts = root / ".everstate" / "autobuild" / plan.name
     stage_runs: list[StageRun] = []
 
     for index, stage in enumerate(plan.stages, start=1):
-        _activate_stage(service, root, plan, stage)
         scenario = _stage_scenario(plan, stage)
+        prior = prior_by_id.get(stage.id)
+
+        # Resume never trusts a historical PASS blindly. Deterministic acceptance
+        # is rerun against the current workspace before the stage is skipped.
+        if resume and prior and prior.get("passed") is True:
+            report = evaluate_scenario(root, scenario)
+            _write_json(artifacts / f"{index:02d}-{stage.id}" / "resume-revalidation.json", report.model_dump(mode="json"))
+            if not report.passed:
+                failed = "; ".join(f"{c.name}: {c.details}" for c in report.checks if not c.passed)
+                raise RuntimeError(f"Cannot resume: previously passed stage {stage.id} no longer validates: {failed}")
+            stage_runs.append(
+                StageRun(
+                    stage_id=stage.id,
+                    title=stage.title,
+                    passed=True,
+                    attempts=(),
+                    council_backend=str(prior.get("council_backend", "revalidated")),
+                    council_participants=int(prior.get("council_participants", 0)),
+                    prior_attempts=int(prior.get("attempts", 0)),
+                )
+            )
+            continue
+
+        _activate_stage(service, root, plan, stage)
+
+        # A failed/interrupted provider may have completed the requested files
+        # before exiting (for example quota exhaustion after writes). On resume,
+        # re-evaluate that stage before spending another model call. This is only
+        # allowed for a stage already present in the prior summary, proving it had
+        # previously received council review and an implementation attempt.
+        if resume and prior is not None:
+            existing_report = evaluate_scenario(root, scenario)
+            _write_json(
+                artifacts / f"{index:02d}-{stage.id}" / "resume-existing-work.json",
+                existing_report.model_dump(mode="json"),
+            )
+            if existing_report.passed:
+                stage_runs.append(
+                    StageRun(
+                        stage_id=stage.id,
+                        title=stage.title,
+                        passed=True,
+                        attempts=(),
+                        council_backend=str(prior.get("council_backend", "revalidated")),
+                        council_participants=int(prior.get("council_participants", 0)),
+                        prior_attempts=int(prior.get("attempts", 0)),
+                    )
+                )
+                continue
+
         before_council = service.continuation_packet(root)
         participants, backend, ruflo = _resolve_council_preflight(
             service=service,
@@ -220,6 +299,7 @@ def run_phased_autobuild(
                 "provider_preflight": detail,
                 "council_backend": backend,
                 "participants": [participant.id for participant in participants],
+                "resume": resume,
             },
         )
 
@@ -232,6 +312,7 @@ def run_phased_autobuild(
                     attempts=(),
                     council_backend=backend,
                     council_participants=len(participants),
+                    prior_attempts=int(prior.get("attempts", 0)) if prior else 0,
                 )
             )
             continue
@@ -292,6 +373,7 @@ def run_phased_autobuild(
                 attempts=tuple(attempts),
                 council_backend=backend,
                 council_participants=participant_count,
+                prior_attempts=int(prior.get("attempts", 0)) if prior else 0,
             )
         )
         if not stage_passed:
@@ -303,12 +385,13 @@ def run_phased_autobuild(
         "project_id": service.continuation_packet(root).project_id,
         "provider": provider.name,
         "passed": passed,
+        "resumed": resume,
         "stages": [
             {
                 "id": item.stage_id,
                 "title": item.title,
                 "passed": item.passed,
-                "attempts": len(item.attempts),
+                "attempts": item.attempt_count,
                 "council_backend": item.council_backend,
                 "council_participants": item.council_participants,
             }

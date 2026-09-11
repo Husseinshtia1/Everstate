@@ -3,8 +3,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+class ProviderQuotaError(RuntimeError):
+    """Raised when a coding provider cannot run because its usage quota is exhausted."""
 
 
 def _candidate_executables(executable: str) -> list[Path]:
@@ -26,6 +31,20 @@ def _candidate_executables(executable: str) -> list[Path]:
         ]
     )
     return candidates
+
+
+def _provider_quota_exhausted(output: str) -> bool:
+    text = output.casefold()
+    markers = (
+        "you've hit your usage limit",
+        "you have hit your usage limit",
+        "usage limit reached",
+        "quota exceeded",
+        "quota exhausted",
+        "insufficient credits",
+        "purchase more credits",
+    )
+    return any(marker in text for marker in markers)
 
 
 @dataclass(frozen=True)
@@ -80,6 +99,47 @@ class ProviderAdapter:
         detail = (completed.stdout or completed.stderr).strip()
         if completed.returncode != 0:
             return False, detail or f"{self.name} readiness probe exited {completed.returncode}."
+
+        # Codex workspace-write on Linux is enforced by the managed bubblewrap
+        # sandbox. Legacy Landlock cannot satisfy permission profiles that need
+        # direct runtime enforcement, so do not silently switch backends. Probe
+        # the real managed sandbox before any inference request and fail with a
+        # host-policy diagnosis if Ubuntu/AppArmor blocks unprivileged userns.
+        if self.executable == "codex" and os.name == "posix" and Path("/proc/sys/kernel").exists():
+            try:
+                sandbox_probe = subprocess.run(
+                    [executable, "sandbox", "/bin/true"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=timeout,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return False, f"Codex managed sandbox probe failed: {exc}"
+            sandbox_detail = (sandbox_probe.stderr or sandbox_probe.stdout).strip()
+            if sandbox_probe.returncode != 0:
+                hint = ""
+                if any(
+                    marker in sandbox_detail
+                    for marker in (
+                        "Failed RTM_NEWADDR",
+                        "Failed RTM_NEWLINK",
+                        "setting up uid map",
+                        "No permissions to create a new namespace",
+                    )
+                ):
+                    hint = (
+                        " Ubuntu/AppArmor is blocking the unprivileged user namespace required by "
+                        "Codex bubblewrap. Keep workspace-write enabled and repair the host sandbox "
+                        "prerequisite; do not use legacy Landlock for this permission profile."
+                    )
+                return False, (
+                    "Codex managed workspace sandbox is not usable on this host: "
+                    + (sandbox_detail or f"exit={sandbox_probe.returncode}")
+                    + hint
+                )
+            return True, f"{detail or self.name + ' headless automation is ready.'}; managed sandbox probe passed."
+
         return True, detail or f"{self.name} headless automation is ready."
 
     def selected_model(self) -> str | None:
@@ -130,7 +190,24 @@ class ProviderAdapter:
             )
         command = self.automation_command(prompt)
         command[0] = executable
-        completed = subprocess.run(command, cwd=root.resolve(), check=False)
+        completed = subprocess.run(
+            command,
+            cwd=root.resolve(),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.stdout:
+            sys.stdout.write(completed.stdout)
+            sys.stdout.flush()
+        if completed.stderr:
+            sys.stderr.write(completed.stderr)
+            sys.stderr.flush()
+        combined = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+        if completed.returncode != 0 and _provider_quota_exhausted(combined):
+            raise ProviderQuotaError(
+                f"{self.name} usage quota is exhausted. Preserve the workspace and resume after the provider limit resets."
+            )
         return completed.returncode
 
     @property
@@ -144,13 +221,17 @@ PROVIDERS: dict[str, ProviderAdapter] = {
         name="Codex",
         executable="codex",
         # Current Codex exposes non-interactive execution through `codex exec`.
-        # Keep the benchmark sandboxed and remove approval prompts explicitly
-        # through config overrides instead of relying on legacy convenience flags.
+        # Keep the benchmark sandboxed and remove approval prompts explicitly.
+        # Everstate's AgentCouncil is the independent review/orchestration layer;
+        # nested Codex multi-agent spawning adds no authority and has produced
+        # orphan-thread failures in real runs, so disable it for automation.
         automation_args=(
             "-c",
             'approval_policy="never"',
             "-c",
             "sandbox_workspace_write.network_access=false",
+            "-c",
+            "agents.enabled=false",
             "exec",
             "--sandbox",
             "workspace-write",
